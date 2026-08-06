@@ -1305,7 +1305,7 @@ app.delete("/api/admin/delete", async (req: Request, res: Response) => {
 });
 
 // Public: Translate English text to Sinhala
-const DEFAULT_TRANSLATOR_API_KEY = "AQ.Ab8RN6JqiIOQeuIQ7ssVQYg4w4DGl8OUVvfO4KtInlJ-Iu3--Q";
+const DEFAULT_TRANSLATOR_API_KEY = "AQ.Ab8RN6JtZrppa-F4ZIzSE5iZvYjlnzO_bu0FMroT1nfDSm2Nww";
 
 app.post("/api/translate", async (req: Request, res: Response) => {
   const payload = req.body || {};
