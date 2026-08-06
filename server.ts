@@ -5,6 +5,7 @@ import { GoogleGenAI } from "@google/genai";
 import JSZip from "jszip";
 import { DOMParser, XMLSerializer } from "@xmldom/xmldom";
 import dotenv from "dotenv";
+import { sql } from "@vercel/postgres";
 import { ConvertToLegacy } from "./src/UnicodeToLegacy.js";
 
 dotenv.config();
@@ -19,6 +20,76 @@ const TEMPLATES_DIR = path.join(PROJECT_ROOT, "templates");
 const PROMPT_PATH = path.join(PROJECT_ROOT, "prompt.txt");
 const PENDING_VOCAB_PATH = path.join(PROJECT_ROOT, "pending_vocab.json");
 
+const TMP_PROMPT_PATH = path.join("/tmp", "prompt.txt");
+const TMP_PENDING_VOCAB_PATH = path.join("/tmp", "pending_vocab.json");
+
+const KV_URL = process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL;
+const KV_TOKEN = process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN;
+
+function isPostgresConfigured(): boolean {
+  return !!(
+    process.env.POSTGRES_URL ||
+    process.env.DATABASE_URL ||
+    process.env.POSTGRES_URL_NON_POOLING ||
+    process.env.POSTGRES_PRISMA_URL
+  );
+}
+
+let pgInitAttempted = false;
+
+async function ensurePgTables(): Promise<boolean> {
+  if (!isPostgresConfigured()) return false;
+  if (pgInitAttempted) return true;
+
+  try {
+    await sql`
+      CREATE TABLE IF NOT EXISTS prompt_store (
+        key VARCHAR(255) PRIMARY KEY,
+        value TEXT NOT NULL,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `;
+    pgInitAttempted = true;
+    return true;
+  } catch (err) {
+    console.error("Vercel Postgres table initialization failed:", err);
+    return false;
+  }
+}
+
+async function kvGet(key: string): Promise<string | null> {
+  if (!KV_URL || !KV_TOKEN) return null;
+  try {
+    const res = await fetch(`${KV_URL}/get/${key}`, {
+      headers: { Authorization: `Bearer ${KV_TOKEN}` },
+    });
+    if (!res.ok) return null;
+    const data = (await res.json()) as { result?: string };
+    return data.result ?? null;
+  } catch (err) {
+    console.error(`KV get error for ${key}:`, err);
+    return null;
+  }
+}
+
+async function kvSet(key: string, value: string): Promise<boolean> {
+  if (!KV_URL || !KV_TOKEN) return false;
+  try {
+    const res = await fetch(`${KV_URL}/set/${key}`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${KV_TOKEN}`,
+        "Content-Type": "text/plain",
+      },
+      body: value,
+    });
+    return res.ok;
+  } catch (err) {
+    console.error(`KV set error for ${key}:`, err);
+    return false;
+  }
+}
+
 const TEMPLATE_FILES: Record<string, string> = {
   normal: path.join(TEMPLATES_DIR, "QuestionNormal.docx"),
   statement: path.join(TEMPLATES_DIR, "QuestionStatement.docx"),
@@ -27,17 +98,172 @@ const TEMPLATE_FILES: Record<string, string> = {
 
 const VALID_TYPES = new Set(Object.keys(TEMPLATE_FILES));
 
+let inMemoryPrompt: string | null = null;
+let inMemoryPendingVocab: Array<{ id: string; english: string; sinhala: string; date: string }> | null = null;
+
+async function getPromptContent(): Promise<string> {
+  // 1. Try Vercel Postgres if configured
+  if (isPostgresConfigured()) {
+    try {
+      await ensurePgTables();
+      const { rows } = await sql`SELECT value FROM prompt_store WHERE key = 'prompt'`;
+      if (rows && rows.length > 0 && rows[0].value) {
+        inMemoryPrompt = rows[0].value;
+        return rows[0].value;
+      }
+    } catch (err) {
+      console.error("Error reading prompt from Vercel Postgres:", err);
+    }
+  }
+
+  // 2. Try Cloud KV if configured
+  const kvData = await kvGet("glossary_prompt");
+  if (kvData !== null) {
+    inMemoryPrompt = kvData;
+    if (isPostgresConfigured()) {
+      savePromptContent(kvData).catch(() => {});
+    }
+    return kvData;
+  }
+
+  if (inMemoryPrompt !== null) {
+    return inMemoryPrompt;
+  }
+
+  let fileContent = "";
+  try {
+    fileContent = await fs.promises.readFile(TMP_PROMPT_PATH, "utf-8");
+  } catch {
+    try {
+      fileContent = await fs.promises.readFile(PROMPT_PATH, "utf-8");
+    } catch {
+      fileContent = "";
+    }
+  }
+
+  inMemoryPrompt = fileContent;
+
+  if (isPostgresConfigured() && fileContent) {
+    savePromptContent(fileContent).catch(() => {});
+  }
+
+  return fileContent;
+}
+
+async function savePromptContent(content: string): Promise<void> {
+  inMemoryPrompt = content;
+
+  // 1. Save to Vercel Postgres if configured
+  if (isPostgresConfigured()) {
+    try {
+      await ensurePgTables();
+      await sql`
+        INSERT INTO prompt_store (key, value)
+        VALUES ('prompt', ${content})
+        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = CURRENT_TIMESTAMP;
+      `;
+    } catch (err) {
+      console.error("Error saving prompt to Vercel Postgres:", err);
+    }
+  }
+
+  // 2. Save to Cloud KV if available
+  await kvSet("glossary_prompt", content);
+
+  // 3. Save to filesystem as fallback
+  try {
+    await fs.promises.writeFile(PROMPT_PATH, content, "utf-8");
+    return;
+  } catch (err) {
+    console.warn("Writing to root PROMPT_PATH failed (likely read-only deployment environment), falling back to /tmp:", err);
+  }
+
+  try {
+    await fs.promises.writeFile(TMP_PROMPT_PATH, content, "utf-8");
+  } catch (err) {
+    console.error("Writing to /tmp/prompt.txt also failed:", err);
+  }
+}
+
 async function getPendingVocab(): Promise<Array<{ id: string; english: string; sinhala: string; date: string }>> {
+  // 1. Try Vercel Postgres if configured
+  if (isPostgresConfigured()) {
+    try {
+      await ensurePgTables();
+      const { rows } = await sql`SELECT value FROM prompt_store WHERE key = 'pending_vocab'`;
+      if (rows && rows.length > 0 && rows[0].value) {
+        const parsed = JSON.parse(rows[0].value);
+        inMemoryPendingVocab = parsed;
+        return parsed;
+      }
+    } catch (err) {
+      console.error("Error reading pending vocab from Vercel Postgres:", err);
+    }
+  }
+
+  // 2. Try Cloud KV if configured
+  const kvData = await kvGet("pending_vocab");
+  if (kvData !== null) {
+    try {
+      const parsed = JSON.parse(kvData);
+      inMemoryPendingVocab = parsed;
+      return parsed;
+    } catch {}
+  }
+
+  if (inMemoryPendingVocab !== null) {
+    return inMemoryPendingVocab;
+  }
+
+  try {
+    const tmpData = await fs.promises.readFile(TMP_PENDING_VOCAB_PATH, "utf-8");
+    inMemoryPendingVocab = JSON.parse(tmpData);
+    return inMemoryPendingVocab;
+  } catch {}
+
   try {
     const data = await fs.promises.readFile(PENDING_VOCAB_PATH, "utf-8");
-    return JSON.parse(data);
+    inMemoryPendingVocab = JSON.parse(data);
+    return inMemoryPendingVocab;
   } catch {
+    inMemoryPendingVocab = [];
     return [];
   }
 }
 
 async function savePendingVocab(list: Array<{ id: string; english: string; sinhala: string; date: string }>): Promise<void> {
-  await fs.promises.writeFile(PENDING_VOCAB_PATH, JSON.stringify(list, null, 2), "utf-8");
+  inMemoryPendingVocab = list;
+  const jsonStr = JSON.stringify(list, null, 2);
+
+  // 1. Save to Vercel Postgres if configured
+  if (isPostgresConfigured()) {
+    try {
+      await ensurePgTables();
+      await sql`
+        INSERT INTO prompt_store (key, value)
+        VALUES ('pending_vocab', ${jsonStr})
+        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = CURRENT_TIMESTAMP;
+      `;
+    } catch (err) {
+      console.error("Error saving pending vocab to Vercel Postgres:", err);
+    }
+  }
+
+  // 2. Save to Cloud KV if available
+  await kvSet("pending_vocab", jsonStr);
+
+  try {
+    await fs.promises.writeFile(PENDING_VOCAB_PATH, jsonStr, "utf-8");
+    return;
+  } catch (err) {
+    console.warn("Writing to root PENDING_VOCAB_PATH failed (likely read-only deployment environment), falling back to /tmp:", err);
+  }
+
+  try {
+    await fs.promises.writeFile(TMP_PENDING_VOCAB_PATH, jsonStr, "utf-8");
+  } catch (err) {
+    console.error("Writing to /tmp/pending_vocab.json also failed:", err);
+  }
 }
 
 function parseVocabulary(promptContent: string): Array<{ english: string; sinhala: string }> {
@@ -293,11 +519,11 @@ app.get("/", (req: Request, res: Response) => {
 // Public: Get active vocabulary
 app.get("/api/vocabulary", async (req: Request, res: Response) => {
   try {
-    const prompt = await fs.promises.readFile(PROMPT_PATH, "utf-8");
+    const prompt = await getPromptContent();
     const vocab = parseVocabulary(prompt);
     return res.json(vocab);
   } catch (err: any) {
-    return res.status(500).json({ error: "Failed to read prompt file." });
+    return res.status(500).json({ error: "Failed to read prompt content." });
   }
 });
 
@@ -356,7 +582,7 @@ app.post("/api/admin/approve", async (req: Request, res: Response) => {
       return res.status(404).json({ error: "Pending suggestion not found." });
     }
 
-    const prompt = await fs.promises.readFile(PROMPT_PATH, "utf-8");
+    const prompt = await getPromptContent();
     const vocab = parseVocabulary(prompt);
 
     const existingIndex = vocab.findIndex(
@@ -369,7 +595,7 @@ app.post("/api/admin/approve", async (req: Request, res: Response) => {
     }
 
     const updatedPrompt = updateVocabularyInPrompt(prompt, vocab);
-    await fs.promises.writeFile(PROMPT_PATH, updatedPrompt, "utf-8");
+    await savePromptContent(updatedPrompt);
 
     // Remove from pending
     const remaining = pending.filter((item) => item.id !== id);
@@ -409,7 +635,7 @@ app.post("/api/admin/add", async (req: Request, res: Response) => {
   }
 
   try {
-    const prompt = await fs.promises.readFile(PROMPT_PATH, "utf-8");
+    const prompt = await getPromptContent();
     const vocab = parseVocabulary(prompt);
 
     const existingIndex = vocab.findIndex(
@@ -422,7 +648,7 @@ app.post("/api/admin/add", async (req: Request, res: Response) => {
     }
 
     const updatedPrompt = updateVocabularyInPrompt(prompt, vocab);
-    await fs.promises.writeFile(PROMPT_PATH, updatedPrompt, "utf-8");
+    await savePromptContent(updatedPrompt);
 
     return res.json({ success: true, vocabulary: vocab });
   } catch (err: any) {
@@ -440,7 +666,7 @@ app.delete("/api/admin/delete", async (req: Request, res: Response) => {
   }
 
   try {
-    const prompt = await fs.promises.readFile(PROMPT_PATH, "utf-8");
+    const prompt = await getPromptContent();
     const vocab = parseVocabulary(prompt);
 
     const filtered = vocab.filter(
@@ -448,7 +674,7 @@ app.delete("/api/admin/delete", async (req: Request, res: Response) => {
     );
 
     const updatedPrompt = updateVocabularyInPrompt(prompt, filtered);
-    await fs.promises.writeFile(PROMPT_PATH, updatedPrompt, "utf-8");
+    await savePromptContent(updatedPrompt);
 
     return res.json({ success: true, vocabulary: filtered });
   } catch (err: any) {
@@ -476,7 +702,7 @@ app.post("/api/translate", async (req: Request, res: Response) => {
 
   let vocabListText = "";
   try {
-    const promptContent = await fs.promises.readFile(PROMPT_PATH, "utf-8");
+    const promptContent = await getPromptContent();
     const vocab = parseVocabulary(promptContent);
     vocabListText = vocab.map((v) => `'${v.english}' as '${v.sinhala}'`).join(",\n");
   } catch {
@@ -561,7 +787,7 @@ app.post("/api/generate", async (req: Request, res: Response) => {
 
   let prompt = "";
   try {
-    prompt = await fs.promises.readFile(PROMPT_PATH, "utf-8");
+    prompt = await getPromptContent();
   } catch {
     return res.status(500).json({ error: "The prompt file is missing on the server." });
   }

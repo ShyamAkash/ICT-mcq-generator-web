@@ -10,10 +10,12 @@
   },
   "dependencies": {
     "@google/genai": "^2.16.0",
+    "@vercel/postgres": "^0.10.0",
     "@xmldom/xmldom": "^0.9.10",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
-    "jszip": "^3.10.1"
+    "jszip": "^3.10.1",
+    "pg": "^8.22.0"
   },
   "devDependencies": {
     "@types/express": "^5.0.6",
