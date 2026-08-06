@@ -111,6 +111,22 @@ c) For code type questions, ensure the code snippet is syntactically valid, and 
 
 d) For statement type questions, ensure the five combination-options logically and exhaustively cover plausible combinations of A, B, and C, and that exactly one option is correct based on the actual truth value of each statement.
 
+5) Mandatory Vocabulary Mapping
+When translating English IT terms into Sinhala, you MUST refer to and strictly use the following predefined translations whenever these terms or concepts appear:
+[VOCAB_START]
+- Topology: ස්ථලකය
+- Classful: පංති සහිත
+- Classless: පංති රහිත
+- Subnet: උපජාල
+- Protocols: නියමාවලි
+- Entities: භූථාර්ත
+- integer: නිඛිලය
+- text: පාඨ
+- signed: ලකුණු සහිත
+- unsigned: ලකුණු රහිත
+- architecture: හෙළකුරු
+[VOCAB_END]
+
 #Overall Tone
 
 

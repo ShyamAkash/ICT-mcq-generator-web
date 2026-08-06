@@ -3,103 +3,264 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Question Generator — Bilingual IT MCQ Generator</title>
-<meta name="description" content="Generate bilingual (English / Sinhala) IT multiple-choice questions and download them as a formatted Word document.">
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%2314171b'/%3E%3Ccircle cx='16' cy='16' r='9' fill='none' stroke='%238FB996' stroke-width='2.4'/%3E%3Ccircle cx='16' cy='16' r='4' fill='%238FB996'/%3E%3C/svg%3E">
+<title>ictfromabc MCQ Generator</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23111111'/%3E%3Cpath d='M16 6L24 22H8L16 6Z' fill='%23dc2626'/%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Lora:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="static/style.css">
 </head>
 <body>
-  <div class="ruled-backdrop" aria-hidden="true"></div>
-
   <div class="page">
     <main class="card">
-      <header class="card__header">
-        <p class="eyebrow">IT MCQ Generator&ensp;·&ensp;English&nbsp;/&nbsp;Sinhala</p>
-        <h1>Question Generator</h1>
-        <p class="lede">
-          Give it a topic, a reference question, or a code snippet. It comes back as one
-          fully formatted, bilingual multiple-choice question — ready to drop into a paper.
-        </p>
+      <header class="top-nav">
+        <h1 class="app-title"><span class="brand-ict">ict</span>fromabc<br><span class="title-sub">Quiz Helper</span></h1>
+        <nav class="nav-tabs" role="tablist">
+          <button type="button" id="tab-generator" class="tab-btn is-active" role="tab" aria-selected="true" aria-controls="view-generator">MCQ Generator</button>
+          <button type="button" id="tab-translator" class="tab-btn" role="tab" aria-selected="false" aria-controls="view-translator">Translator</button>
+          <button type="button" id="tab-glossary" class="tab-btn" role="tab" aria-selected="false" aria-controls="view-glossary">Glossary</button>
+          <button type="button" id="tab-admin" class="tab-btn is-hidden" role="tab" aria-selected="false" aria-controls="view-admin">Admin Portal</button>
+        </nav>
       </header>
 
-      <form id="mcq-form" class="card__body" novalidate>
+      <!-- Generator View -->
+      <section id="view-generator" class="view-panel" role="tabpanel">
+        <form id="mcq-form" novalidate>
+          <div class="field">
+            <div class="label-row">
+              <label for="api-key">Gemini API Key</label>
+              <span class="sub-label">Saved in browser cache</span>
+            </div>
+            <input
+              type="password"
+              id="api-key"
+              name="api-key"
+              class="mono-input"
+              autocomplete="off"
+            >
+          </div>
 
-        <div class="field">
-          <label for="topic">Question topic</label>
-          <textarea
-            id="topic"
-            name="topic"
-            rows="6"
-            placeholder="e.g. Normalization in relational databases — or paste a reference question or a code snippet…"
-            required
-          ></textarea>
-        </div>
+          <div class="field">
+            <label for="topic">Describe the question / Provide reference question</label>
+            <textarea
+              id="topic"
+              name="topic"
+              rows="5"
+              required
+            ></textarea>
+          </div>
 
-        <div class="field">
-          <label for="model">Gemini model</label>
-          <input
-            type="text"
-            id="model"
-            name="model"
-            class="mono-input"
-            value="gemini-3.6-flash"
-            spellcheck="false"
-            autocomplete="off"
-            required
-          >
-        </div>
+          <div class="field">
+            <label for="model">Gemini Model</label>
+            <input
+              type="text"
+              id="model"
+              name="model"
+              class="mono-input"
+              value="gemini-3.6-flash"
+              spellcheck="false"
+              autocomplete="off"
+              required
+            >
+          </div>
 
-        <div class="field">
-          <label id="qtype-label">Question type</label>
-          <div class="bubble-group" role="radiogroup" aria-labelledby="qtype-label">
+          <div class="field">
+            <label id="qtype-label">Question Type</label>
+            <div class="bubble-group" role="radiogroup" aria-labelledby="qtype-label">
+              <label class="bubble">
+                <input type="radio" name="qtype" value="normal" checked>
+                <span class="bubble__dot" aria-hidden="true"></span>
+                <span class="bubble__text"><strong>Normal</strong></span>
+              </label>
 
-            <label class="bubble">
-              <input type="radio" name="qtype" value="normal" checked>
-              <span class="bubble__dot" aria-hidden="true"></span>
-              <span class="bubble__text">
-                <strong>Normal</strong>
-                <small>One stem, five options</small>
-              </span>
-            </label>
+              <label class="bubble">
+                <input type="radio" name="qtype" value="statement">
+                <span class="bubble__dot" aria-hidden="true"></span>
+                <span class="bubble__text"><strong>Statement</strong></span>
+              </label>
 
-            <label class="bubble">
-              <input type="radio" name="qtype" value="statement">
-              <span class="bubble__dot" aria-hidden="true"></span>
-              <span class="bubble__text">
-                <strong>Statement</strong>
-                <small>A / B / C combinations</small>
-              </span>
-            </label>
+              <label class="bubble">
+                <input type="radio" name="qtype" value="code">
+                <span class="bubble__dot" aria-hidden="true"></span>
+                <span class="bubble__text"><strong>Code</strong></span>
+              </label>
+            </div>
+          </div>
 
-            <label class="bubble">
-              <input type="radio" name="qtype" value="code">
-              <span class="bubble__dot" aria-hidden="true"></span>
-              <span class="bubble__text">
-                <strong>Code</strong>
-                <small>Includes a code snippet</small>
-              </span>
-            </label>
+          <button type="submit" id="generate-btn" class="generate-btn">
+            <span class="generate-btn__spinner" aria-hidden="true"></span>
+            <span class="generate-btn__label">Generate .docx</span>
+          </button>
 
+          <p id="status" class="status" role="status" aria-live="polite"></p>
+        </form>
+      </section>
+
+      <!-- Translator View -->
+      <section id="view-translator" class="view-panel is-hidden" role="tabpanel">
+        <form id="translate-form" novalidate>
+          <div class="field">
+            <div class="label-row">
+              <label for="translate-api-key">Gemini API Key</label>
+              <span class="sub-label">Saved in browser cache</span>
+            </div>
+            <input
+              type="password"
+              id="translate-api-key"
+              name="translate-api-key"
+              class="mono-input"
+              autocomplete="off"
+            >
+          </div>
+
+          <div class="field">
+            <label for="translate-source">English Text</label>
+            <textarea
+              id="translate-source"
+              name="translate-source"
+              rows="5"
+              placeholder="Type or paste English text to translate..."
+              required
+            ></textarea>
+          </div>
+
+          <button type="submit" id="translate-btn" class="generate-btn">
+            <span class="generate-btn__spinner" aria-hidden="true"></span>
+            <span class="generate-btn__label">Translate to Sinhala</span>
+          </button>
+
+          <p id="translate-status" class="status" role="status" aria-live="polite"></p>
+
+          <div class="field">
+            <div class="label-row">
+              <label for="translate-result">Sinhala Translation (Legacy DL/FM Font Format)</label>
+              <div class="btn-group-sm" style="display: flex; gap: 6px; align-items: center;">
+                <button type="button" id="toggle-font-btn" class="btn-sm" style="display: none; color: #ffffff !important;">View in Unicode</button>
+                <button type="button" id="copy-translation-btn" class="btn-sm" style="display: none; color: #ffffff !important;">Copy Legacy</button>
+              </div>
+            </div>
+            <textarea
+              id="translate-result"
+              name="translate-result"
+              rows="5"
+              readonly
+              placeholder="Translated Sinhala text will appear here..."
+            ></textarea>
+          </div>
+        </form>
+      </section>
+
+      <!-- Glossary / Public Vocabulary View -->
+      <section id="view-glossary" class="view-panel is-hidden" role="tabpanel">
+        <div class="glossary-container">
+          <form id="suggest-form" class="vocab-add-form">
+            <div class="section-heading">Suggest a Translation</div>
+            <div class="vocab-input-group">
+              <div class="field">
+                <label for="suggest-english">English Word</label>
+                <input type="text" id="suggest-english" placeholder="e.g. Bandwidth" required>
+              </div>
+              <div class="field">
+                <label for="suggest-sinhala">Sinhala Translation</label>
+                <input type="text" id="suggest-sinhala" placeholder="e.g. කලාප පළල" required>
+              </div>
+            </div>
+            <button type="submit" id="suggest-btn" class="generate-btn vocab-submit-btn">Submit Suggestion</button>
+          </form>
+
+          <p id="suggest-status" class="status" role="status" aria-live="polite"></p>
+
+          <div class="vocab-list-wrapper">
+            <div class="section-heading">Active Vocabulary Mappings</div>
+            <div class="vocab-header">
+              <span>English</span>
+              <span>Sinhala</span>
+            </div>
+            <div id="glossary-list" class="vocab-list">
+              <!-- Dynamically populated -->
+            </div>
           </div>
         </div>
+      </section>
 
-        <button type="submit" id="generate-btn" class="generate-btn">
-          <span class="generate-btn__spinner" aria-hidden="true"></span>
-          <span class="generate-btn__label">Generate&nbsp;.docx</span>
-        </button>
+      <!-- Secret Admin View -->
+      <section id="view-admin" class="view-panel is-hidden" role="tabpanel">
+        <!-- Admin Login Screen -->
+        <div id="admin-login-view" class="admin-login-card">
+          <div class="admin-badge">Admin Authentication</div>
+          <form id="admin-login-form">
+            <div class="field">
+              <label for="admin-pass">Admin Password</label>
+              <input type="password" id="admin-pass" placeholder="Enter admin password..." required autocomplete="current-password">
+            </div>
+            <button type="submit" class="generate-btn">Unlock Admin Portal</button>
+          </form>
+          <p id="login-status" class="status" role="status" aria-live="polite"></p>
+        </div>
 
-        <p id="status" class="status" role="status" aria-live="polite"></p>
-      </form>
+        <!-- Admin Content View -->
+        <div id="admin-content-view" class="admin-container is-hidden">
+          <div class="admin-header-row">
+            <div class="admin-badge">Admin Portal</div>
+            <button type="button" id="admin-logout-btn" class="btn-sm btn-delete">Lock Portal</button>
+          </div>
 
-      <footer class="card__footer">
-        <span class="footer-dot" aria-hidden="true"></span>
-        Each click calls the Gemini API and streams the document straight to your browser.
-        Nothing you generate is saved on the server.
-      </footer>
+          <!-- Direct Add Form -->
+          <form id="admin-add-form" class="vocab-add-form">
+            <div class="section-heading">Directly Add / Update Vocabulary</div>
+            <div class="vocab-input-group">
+              <div class="field">
+                <label for="admin-english">English Word</label>
+                <input type="text" id="admin-english" placeholder="e.g. Router" required>
+              </div>
+              <div class="field">
+                <label for="admin-sinhala">Sinhala Translation</label>
+                <input type="text" id="admin-sinhala" placeholder="e.g. රවුටරය" required>
+              </div>
+            </div>
+            <button type="submit" id="admin-add-btn" class="generate-btn vocab-submit-btn">Add Directly to Prompt</button>
+          </form>
+
+          <p id="admin-status" class="status" role="status" aria-live="polite"></p>
+
+          <!-- Pending Suggestions Section -->
+          <div class="vocab-section">
+            <div class="section-heading">Pending User Suggestions</div>
+            <div id="pending-list-wrapper" class="vocab-list-wrapper">
+              <div class="vocab-header admin-header">
+                <span>English</span>
+                <span>Sinhala</span>
+                <span class="text-right">Actions</span>
+              </div>
+              <div id="pending-list" class="vocab-list">
+                <!-- Dynamically populated -->
+              </div>
+            </div>
+          </div>
+
+          <!-- Approved Active Mappings Section -->
+          <div class="vocab-section">
+            <div class="section-heading">Active Prompt Vocabulary</div>
+            <div class="vocab-list-wrapper">
+              <div class="vocab-header admin-header">
+                <span>English</span>
+                <span>Sinhala</span>
+                <span class="text-right">Action</span>
+              </div>
+              <div id="admin-active-list" class="vocab-list">
+                <!-- Dynamically populated -->
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </section>
+
     </main>
+
+    <footer class="app-footer">
+      <a href="https://github.com/ShyamAkash" target="_blank" rel="noopener noreferrer" class="developed-by">Developed by zyppy</a>
+    </footer>
   </div>
 
   <script src="static/script.js"></script>

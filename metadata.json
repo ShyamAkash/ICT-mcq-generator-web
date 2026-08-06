@@ -1,0 +1,6 @@
+{
+  "name": "ictfromabc MCQ Generator",
+  "description": "Generate bilingual (English / Sinhala) IT multiple-choice questions and download them as a formatted Word document.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
