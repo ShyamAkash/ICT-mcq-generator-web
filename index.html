@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Question Generator — Bilingual IT MCQ Generator</title>
+<meta name="description" content="Generate bilingual (English / Sinhala) IT multiple-choice questions and download them as a formatted Word document.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%2314171b'/%3E%3Ccircle cx='16' cy='16' r='9' fill='none' stroke='%238FB996' stroke-width='2.4'/%3E%3Ccircle cx='16' cy='16' r='4' fill='%238FB996'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Lora:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="static/style.css">
+</head>
+<body>
+  <div class="ruled-backdrop" aria-hidden="true"></div>
+
+  <div class="page">
+    <main class="card">
+      <header class="card__header">
+        <p class="eyebrow">IT MCQ Generator&ensp;·&ensp;English&nbsp;/&nbsp;Sinhala</p>
+        <h1>Question Generator</h1>
+        <p class="lede">
+          Give it a topic, a reference question, or a code snippet. It comes back as one
+          fully formatted, bilingual multiple-choice question — ready to drop into a paper.
+        </p>
+      </header>
+
+      <form id="mcq-form" class="card__body" novalidate>
+
+        <div class="field">
+          <label for="topic">Question topic</label>
+          <textarea
+            id="topic"
+            name="topic"
+            rows="6"
+            placeholder="e.g. Normalization in relational databases — or paste a reference question or a code snippet…"
+            required
+          ></textarea>
+        </div>
+
+        <div class="field">
+          <label for="model">Gemini model</label>
+          <input
+            type="text"
+            id="model"
+            name="model"
+            class="mono-input"
+            value="gemini-3.6-flash"
+            spellcheck="false"
+            autocomplete="off"
+            required
+          >
+        </div>
+
+        <div class="field">
+          <label id="qtype-label">Question type</label>
+          <div class="bubble-group" role="radiogroup" aria-labelledby="qtype-label">
+
+            <label class="bubble">
+              <input type="radio" name="qtype" value="normal" checked>
+              <span class="bubble__dot" aria-hidden="true"></span>
+              <span class="bubble__text">
+                <strong>Normal</strong>
+                <small>One stem, five options</small>
+              </span>
+            </label>
+
+            <label class="bubble">
+              <input type="radio" name="qtype" value="statement">
+              <span class="bubble__dot" aria-hidden="true"></span>
+              <span class="bubble__text">
+                <strong>Statement</strong>
+                <small>A / B / C combinations</small>
+              </span>
+            </label>
+
+            <label class="bubble">
+              <input type="radio" name="qtype" value="code">
+              <span class="bubble__dot" aria-hidden="true"></span>
+              <span class="bubble__text">
+                <strong>Code</strong>
+                <small>Includes a code snippet</small>
+              </span>
+            </label>
+
+          </div>
+        </div>
+
+        <button type="submit" id="generate-btn" class="generate-btn">
+          <span class="generate-btn__spinner" aria-hidden="true"></span>
+          <span class="generate-btn__label">Generate&nbsp;.docx</span>
+        </button>
+
+        <p id="status" class="status" role="status" aria-live="polite"></p>
+      </form>
+
+      <footer class="card__footer">
+        <span class="footer-dot" aria-hidden="true"></span>
+        Each click calls the Gemini API and streams the document straight to your browser.
+        Nothing you generate is saved on the server.
+      </footer>
+    </main>
+  </div>
+
+  <script src="static/script.js"></script>
+</body>
+</html>
