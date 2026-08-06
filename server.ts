@@ -1,6 +1,8 @@
 import express, { Request, Response } from "express";
 import path from "path";
 import fs from "fs";
+import crypto from "crypto";
+import cookieParser from "cookie-parser";
 import { GoogleGenAI } from "@google/genai";
 import JSZip from "jszip";
 import { DOMParser, XMLSerializer } from "@xmldom/xmldom";
@@ -14,6 +16,7 @@ const app = express();
 const PORT = 3000;
 
 app.use(express.json());
+app.use(cookieParser());
 
 const PROJECT_ROOT = process.cwd();
 const TEMPLATES_DIR = path.join(PROJECT_ROOT, "templates");
@@ -22,6 +25,9 @@ const PENDING_VOCAB_PATH = path.join(PROJECT_ROOT, "pending_vocab.json");
 
 const TMP_PROMPT_PATH = path.join("/tmp", "prompt.txt");
 const TMP_PENDING_VOCAB_PATH = path.join("/tmp", "pending_vocab.json");
+const TMP_USERS_PATH = path.join("/tmp", "users.json");
+const TMP_SESSIONS_PATH = path.join("/tmp", "sessions.json");
+const TMP_PROMPT_HISTORY_PATH = path.join("/tmp", "prompt_history.json");
 
 const KV_URL = process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL;
 const KV_TOKEN = process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN;
@@ -49,12 +55,331 @@ async function ensurePgTables(): Promise<boolean> {
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
     `;
+    await sql`
+      CREATE TABLE IF NOT EXISTS users (
+        id VARCHAR(255) PRIMARY KEY,
+        email VARCHAR(255) UNIQUE NOT NULL,
+        name VARCHAR(255) NOT NULL,
+        picture TEXT,
+        password_hash TEXT,
+        auth_provider VARCHAR(50) DEFAULT 'google',
+        role VARCHAR(50) DEFAULT 'user',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        last_login TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `;
+    await sql`
+      CREATE TABLE IF NOT EXISTS sessions (
+        id VARCHAR(255) PRIMARY KEY,
+        user_id VARCHAR(255) REFERENCES users(id) ON DELETE CASCADE,
+        expires_at TIMESTAMP NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `;
+    await sql`
+      CREATE TABLE IF NOT EXISTS prompt_history (
+        id VARCHAR(255) PRIMARY KEY,
+        user_id VARCHAR(255) NOT NULL,
+        user_email VARCHAR(255) NOT NULL,
+        user_name VARCHAR(255) NOT NULL,
+        topic TEXT NOT NULL,
+        qtype VARCHAR(50) NOT NULL,
+        model VARCHAR(100) NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `;
     pgInitAttempted = true;
     return true;
   } catch (err) {
     console.error("Vercel Postgres table initialization failed:", err);
     return false;
   }
+}
+
+// Fallback in-memory / file stores for preview environments
+let memoryUsers: Record<string, any> = {};
+let memorySessions: Record<string, any> = {};
+let memoryPromptHistory: Array<any> = [];
+
+async function loadFallbackData() {
+  try {
+    const uData = await fs.promises.readFile(TMP_USERS_PATH, "utf-8");
+    memoryUsers = JSON.parse(uData);
+  } catch {}
+  try {
+    const sData = await fs.promises.readFile(TMP_SESSIONS_PATH, "utf-8");
+    memorySessions = JSON.parse(sData);
+  } catch {}
+  try {
+    const hData = await fs.promises.readFile(TMP_PROMPT_HISTORY_PATH, "utf-8");
+    memoryPromptHistory = JSON.parse(hData);
+  } catch {}
+}
+loadFallbackData();
+
+async function saveFallbackUsers() {
+  try {
+    await fs.promises.writeFile(TMP_USERS_PATH, JSON.stringify(memoryUsers, null, 2));
+  } catch {}
+}
+async function saveFallbackSessions() {
+  try {
+    await fs.promises.writeFile(TMP_SESSIONS_PATH, JSON.stringify(memorySessions, null, 2));
+  } catch {}
+}
+async function saveFallbackPromptHistory() {
+  try {
+    await fs.promises.writeFile(TMP_PROMPT_HISTORY_PATH, JSON.stringify(memoryPromptHistory, null, 2));
+  } catch {}
+}
+
+interface User {
+  id: string;
+  email: string;
+  name: string;
+  picture?: string;
+  password_hash?: string;
+  auth_provider: string;
+  role: string;
+  created_at?: string;
+  last_login?: string;
+}
+
+async function findUserByEmail(email: string): Promise<User | null> {
+  const cleanEmail = email.toLowerCase().trim();
+  if (isPostgresConfigured()) {
+    try {
+      await ensurePgTables();
+      const { rows } = await sql`SELECT * FROM users WHERE LOWER(email) = ${cleanEmail}`;
+      if (rows && rows.length > 0) return rows[0] as User;
+    } catch (err) {
+      console.error("Error finding user by email in Postgres:", err);
+    }
+  }
+
+  const found = Object.values(memoryUsers).find(
+    (u: any) => u.email.toLowerCase() === cleanEmail
+  );
+  return (found as User) || null;
+}
+
+async function findUserById(id: string): Promise<User | null> {
+  if (isPostgresConfigured()) {
+    try {
+      await ensurePgTables();
+      const { rows } = await sql`SELECT * FROM users WHERE id = ${id}`;
+      if (rows && rows.length > 0) return rows[0] as User;
+    } catch (err) {
+      console.error("Error finding user by ID in Postgres:", err);
+    }
+  }
+  return (memoryUsers[id] as User) || null;
+}
+
+async function createUser(user: Omit<User, "id">): Promise<User> {
+  const id = "usr_" + crypto.randomUUID().replace(/-/g, "").slice(0, 16);
+  const now = new Date().toISOString();
+  const newUser: User = {
+    id,
+    email: user.email.toLowerCase().trim(),
+    name: user.name,
+    picture: user.picture || "",
+    password_hash: user.password_hash || "",
+    auth_provider: user.auth_provider || "google",
+    role: user.role || "user",
+    created_at: now,
+    last_login: now,
+  };
+
+  if (isPostgresConfigured()) {
+    try {
+      await ensurePgTables();
+      await sql`
+        INSERT INTO users (id, email, name, picture, password_hash, auth_provider, role, created_at, last_login)
+        VALUES (${newUser.id}, ${newUser.email}, ${newUser.name}, ${newUser.picture}, ${newUser.password_hash}, ${newUser.auth_provider}, ${newUser.role}, NOW(), NOW());
+      `;
+    } catch (err) {
+      console.error("Error inserting user into Postgres:", err);
+    }
+  }
+
+  memoryUsers[id] = newUser;
+  await saveFallbackUsers();
+  return newUser;
+}
+
+async function updateUserLastLogin(userId: string): Promise<void> {
+  const now = new Date().toISOString();
+  if (isPostgresConfigured()) {
+    try {
+      await ensurePgTables();
+      await sql`UPDATE users SET last_login = NOW() WHERE id = ${userId}`;
+    } catch (err) {
+      console.error("Error updating user last login in Postgres:", err);
+    }
+  }
+  if (memoryUsers[userId]) {
+    memoryUsers[userId].last_login = now;
+    await saveFallbackUsers();
+  }
+}
+
+async function createSession(userId: string): Promise<{ id: string; user_id: string }> {
+  const sessionId = "sess_" + crypto.randomUUID();
+  const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(); // 30 days
+
+  if (isPostgresConfigured()) {
+    try {
+      await ensurePgTables();
+      await sql`
+        INSERT INTO sessions (id, user_id, expires_at)
+        VALUES (${sessionId}, ${userId}, ${expiresAt});
+      `;
+    } catch (err) {
+      console.error("Error creating session in Postgres:", err);
+    }
+  }
+
+  memorySessions[sessionId] = { id: sessionId, user_id: userId, expires_at: expiresAt };
+  await saveFallbackSessions();
+  return { id: sessionId, user_id: userId };
+}
+
+async function getUserBySession(sessionId: string): Promise<User | null> {
+  if (isPostgresConfigured()) {
+    try {
+      await ensurePgTables();
+      const { rows } = await sql`
+        SELECT u.* FROM users u
+        JOIN sessions s ON u.id = s.user_id
+        WHERE s.id = ${sessionId} AND s.expires_at > NOW();
+      `;
+      if (rows && rows.length > 0) return rows[0] as User;
+    } catch (err) {
+      console.error("Error getting user by session in Postgres:", err);
+    }
+  }
+
+  const sess = memorySessions[sessionId];
+  if (!sess) return null;
+  if (new Date(sess.expires_at).getTime() < Date.now()) {
+    delete memorySessions[sessionId];
+    await saveFallbackSessions();
+    return null;
+  }
+  return await findUserById(sess.user_id);
+}
+
+async function deleteSession(sessionId: string): Promise<void> {
+  if (isPostgresConfigured()) {
+    try {
+      await ensurePgTables();
+      await sql`DELETE FROM sessions WHERE id = ${sessionId}`;
+    } catch (err) {
+      console.error("Error deleting session in Postgres:", err);
+    }
+  }
+  delete memorySessions[sessionId];
+  await saveFallbackSessions();
+}
+
+async function getAllUsers(): Promise<User[]> {
+  if (isPostgresConfigured()) {
+    try {
+      await ensurePgTables();
+      const { rows } = await sql`
+        SELECT id, email, name, picture, auth_provider, role, created_at, last_login
+        FROM users ORDER BY created_at DESC;
+      `;
+      if (rows) return rows as User[];
+    } catch (err) {
+      console.error("Error getting all users from Postgres:", err);
+    }
+  }
+  return Object.values(memoryUsers).map((u: any) => ({
+    id: u.id,
+    email: u.email,
+    name: u.name,
+    picture: u.picture,
+    auth_provider: u.auth_provider,
+    role: u.role,
+    created_at: u.created_at,
+    last_login: u.last_login,
+  }));
+}
+
+async function addPromptHistory(item: {
+  userId: string;
+  userEmail: string;
+  userName: string;
+  topic: string;
+  qtype: string;
+  model: string;
+}): Promise<void> {
+  const id = "ph_" + crypto.randomUUID().replace(/-/g, "").slice(0, 16);
+  const now = new Date().toISOString();
+
+  if (isPostgresConfigured()) {
+    try {
+      await ensurePgTables();
+      await sql`
+        INSERT INTO prompt_history (id, user_id, user_email, user_name, topic, qtype, model, created_at)
+        VALUES (${id}, ${item.userId}, ${item.userEmail}, ${item.userName}, ${item.topic}, ${item.qtype}, ${item.model}, NOW());
+      `;
+    } catch (err) {
+      console.error("Error adding prompt history in Postgres:", err);
+    }
+  }
+
+  memoryPromptHistory.unshift({
+    id,
+    user_id: item.userId,
+    user_email: item.userEmail,
+    user_name: item.userName,
+    topic: item.topic,
+    qtype: item.qtype,
+    model: item.model,
+    created_at: now,
+  });
+  await saveFallbackPromptHistory();
+}
+
+async function getPromptHistory(): Promise<any[]> {
+  if (isPostgresConfigured()) {
+    try {
+      await ensurePgTables();
+      const { rows } = await sql`
+        SELECT * FROM prompt_history ORDER BY created_at DESC;
+      `;
+      if (rows) return rows;
+    } catch (err) {
+      console.error("Error getting prompt history from Postgres:", err);
+    }
+  }
+  return memoryPromptHistory;
+}
+
+function extractBearerToken(req: Request): string | null {
+  const authHeader = req.headers.authorization;
+  if (authHeader && authHeader.startsWith("Bearer ")) {
+    return authHeader.substring(7).trim();
+  }
+  return null;
+}
+
+async function getCurrentUser(req: Request): Promise<User | null> {
+  const token = req.cookies?.session_id || extractBearerToken(req);
+  if (!token) return null;
+  return await getUserBySession(token);
+}
+
+function setSessionCookie(res: Response, token: string) {
+  res.cookie("session_id", token, {
+    httpOnly: true,
+    secure: true,
+    sameSite: "none",
+    maxAge: 30 * 24 * 60 * 60 * 1000,
+  });
 }
 
 async function kvGet(key: string): Promise<string | null> {
@@ -516,6 +841,273 @@ app.get("/", (req: Request, res: Response) => {
   res.sendFile(path.join(PROJECT_ROOT, "index.html"));
 });
 
+// ==========================================
+// Authentication API Endpoints
+// ==========================================
+
+// Get Current Signed-In User
+app.get("/api/auth/me", async (req: Request, res: Response) => {
+  try {
+    const user = await getCurrentUser(req);
+    if (!user) {
+      return res.json({ user: null });
+    }
+    const role = (user.email && user.email.toLowerCase() === "sachoice51@gmail.com") ? "admin" : user.role;
+    return res.json({
+      user: {
+        id: user.id,
+        email: user.email,
+        name: user.name,
+        picture: user.picture,
+        auth_provider: user.auth_provider,
+        role: role,
+        created_at: user.created_at,
+        last_login: user.last_login,
+      },
+    });
+  } catch (err: any) {
+    return res.status(500).json({ error: "Failed to fetch user session." });
+  }
+});
+
+function getRedirectUri(req: Request): string {
+  if (req.query && typeof req.query.redirect_uri === "string" && req.query.redirect_uri) {
+    return req.query.redirect_uri;
+  }
+  const host = req.get("host") || "localhost:3000";
+  const protocol = (req.headers["x-forwarded-proto"] as string) || req.protocol || "http";
+  const isCloudRun = host.includes(".run.app");
+  const effProtocol = isCloudRun ? "https" : protocol;
+  const appUrl = process.env.APP_URL || `${effProtocol}://${host}`;
+  return `${appUrl.replace(/\/$/, "")}/api/auth/google/callback`;
+}
+
+// Get Google OAuth Authorization URL
+app.get(["/api/auth/google", "/api/auth/google/url"], (req: Request, res: Response) => {
+  const clientId = process.env.GOOGLE_CLIENT_ID;
+  const redirectUri = getRedirectUri(req);
+
+  if (!clientId) {
+    return res.json({
+      configured: false,
+      url: null,
+      redirectUri,
+      message: "Google Client ID is not configured.",
+    });
+  }
+
+  const params = new URLSearchParams({
+    client_id: clientId,
+    redirect_uri: redirectUri,
+    response_type: "code",
+    scope: "openid profile email",
+    access_type: "offline",
+    prompt: "select_account",
+  });
+
+  const url = `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
+  return res.json({ configured: true, url, redirectUri });
+});
+
+// Google OAuth Callback Handler
+app.get(["/api/auth/google/callback", "/api/auth/google/callback/"], async (req: Request, res: Response) => {
+  const { code, error } = req.query;
+
+  if (error || !code) {
+    return res.status(400).send(`
+      <html>
+        <body>
+          <script>
+            if (window.opener) {
+              window.opener.postMessage({ type: 'OAUTH_AUTH_ERROR', error: ${JSON.stringify(error || "No auth code received")} }, '*');
+              window.close();
+            } else {
+              window.location.href = '/';
+            }
+          </script>
+          <p>Authentication failed: ${error || "No code received"}. You can close this window.</p>
+        </body>
+      </html>
+    `);
+  }
+
+  try {
+    const clientId = process.env.GOOGLE_CLIENT_ID;
+    const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
+    const redirectUri = getRedirectUri(req);
+
+    // Exchange authorization code for token
+    const tokenRes = await fetch("https://oauth2.googleapis.com/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        code: String(code),
+        client_id: clientId || "",
+        client_secret: clientSecret || "",
+        redirect_uri: redirectUri,
+        grant_type: "authorization_code",
+      }).toString(),
+    });
+
+    if (!tokenRes.ok) {
+      const errText = await tokenRes.text();
+      throw new Error(`Failed to exchange code: ${errText}`);
+    }
+
+    const tokenData = await tokenRes.json();
+    const accessToken = tokenData.access_token;
+
+    // Fetch Google user profile
+    const userRes = await fetch("https://www.googleapis.com/oauth2/v2/userinfo", {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+
+    if (!userRes.ok) {
+      throw new Error("Failed to fetch Google user profile.");
+    }
+
+    const gUser = await userRes.json();
+    const email = gUser.email;
+    const name = gUser.name || email.split("@")[0];
+    const picture = gUser.picture || "";
+
+    let role = "user";
+    if (email.toLowerCase() === "sachoice51@gmail.com" || email.toLowerCase().includes("admin")) {
+      role = "admin";
+    }
+
+    let user = await findUserByEmail(email);
+    if (!user) {
+      const allUsers = await getAllUsers();
+      if (allUsers.length === 0) role = "admin";
+
+      user = await createUser({
+        email,
+        name,
+        picture,
+        auth_provider: "google",
+        role,
+      });
+    } else {
+      await updateUserLastLogin(user.id);
+    }
+
+    const session = await createSession(user.id);
+    setSessionCookie(res, session.id);
+
+    const safeUserJson = JSON.stringify({
+      id: user.id,
+      email: user.email,
+      name: user.name,
+      picture: user.picture,
+      role: user.role,
+      token: session.id,
+    });
+
+    return res.send(`
+      <html>
+        <body>
+          <script>
+            if (window.opener) {
+              window.opener.postMessage({ type: 'OAUTH_AUTH_SUCCESS', user: ${safeUserJson} }, '*');
+              window.close();
+            } else {
+              window.location.href = '/';
+            }
+          </script>
+          <p>Sign in successful. Redirecting...</p>
+        </body>
+      </html>
+    `);
+  } catch (err: any) {
+    console.error("Google OAuth Callback Error:", err);
+    return res.status(500).send(`
+      <html>
+        <body>
+          <script>
+            if (window.opener) {
+              window.opener.postMessage({ type: 'OAUTH_AUTH_ERROR', error: ${JSON.stringify(err?.message || "OAuth processing error")} }, '*');
+              window.close();
+            } else {
+              window.location.href = '/';
+            }
+          </script>
+          <p>Authentication error: ${err?.message || "Server error"}. You can close this window.</p>
+        </body>
+      </html>
+    `);
+  }
+});
+
+// Helper to check admin access
+function isUserAdminAccount(user: any, req?: Request): boolean {
+  if (user && user.email && user.email.toLowerCase() === "sachoice51@gmail.com") {
+    return true;
+  }
+  if (user && user.role === "admin") {
+    return true;
+  }
+  return false;
+}
+
+// Email/Password Register (Disabled - Google Sign In Required for New Accounts)
+app.post("/api/auth/register", async (req: Request, res: Response) => {
+  return res.status(400).json({
+    error: "Registration with email is disabled. Please sign in with Google to create a new account."
+  });
+});
+
+// Email/Password Login
+app.post("/api/auth/login", async (req: Request, res: Response) => {
+  const { email, password } = req.body || {};
+  if (!email || !password) {
+    return res.status(400).json({ error: "Email and password are required." });
+  }
+
+  const cleanEmail = String(email).trim().toLowerCase();
+  try {
+    const user = await findUserByEmail(cleanEmail);
+    if (!user) {
+      return res.status(400).json({ error: "Invalid email or password." });
+    }
+
+    if (user.password_hash) {
+      const hash = crypto.createHash("sha256").update(password).digest("hex");
+      if (user.password_hash !== hash) {
+        return res.status(400).json({ error: "Invalid email or password." });
+      }
+    }
+
+    await updateUserLastLogin(user.id);
+    const session = await createSession(user.id);
+    setSessionCookie(res, session.id);
+
+    return res.json({
+      success: true,
+      user: {
+        id: user.id,
+        email: user.email,
+        name: user.name,
+        picture: user.picture,
+        role: user.role,
+        token: session.id,
+      },
+    });
+  } catch (err: any) {
+    return res.status(500).json({ error: "Sign in failed. Please try again." });
+  }
+});
+
+// Logout
+app.post("/api/auth/logout", async (req: Request, res: Response) => {
+  const sessionId = req.cookies?.session_id || extractBearerToken(req);
+  if (sessionId) {
+    await deleteSession(sessionId);
+  }
+  res.clearCookie("session_id", { secure: true, sameSite: "none" });
+  return res.json({ success: true });
+});
+
 // Public: Get active vocabulary
 app.get("/api/vocabulary", async (req: Request, res: Response) => {
   try {
@@ -555,6 +1147,36 @@ app.post("/api/vocabulary/suggest", async (req: Request, res: Response) => {
     return res.json({ success: true, message: "Translation suggestion submitted for admin review!" });
   } catch (err: any) {
     return res.status(500).json({ error: "Failed to save translation suggestion." });
+  }
+});
+
+// Admin: Get all registered users info
+app.get("/api/admin/users", async (req: Request, res: Response) => {
+  try {
+    const user = await getCurrentUser(req);
+    if (!isUserAdminAccount(user, req)) {
+      return res.status(403).json({ error: "Admin authentication required." });
+    }
+
+    const users = await getAllUsers();
+    return res.json(users);
+  } catch (err: any) {
+    return res.status(500).json({ error: "Failed to fetch users list." });
+  }
+});
+
+// Admin: Get prompt generation history by user
+app.get("/api/admin/prompts", async (req: Request, res: Response) => {
+  try {
+    const user = await getCurrentUser(req);
+    if (!isUserAdminAccount(user, req)) {
+      return res.status(403).json({ error: "Admin authentication required." });
+    }
+
+    const prompts = await getPromptHistory();
+    return res.json(prompts);
+  } catch (err: any) {
+    return res.status(500).json({ error: "Failed to fetch prompt history." });
   }
 });
 
@@ -683,6 +1305,8 @@ app.delete("/api/admin/delete", async (req: Request, res: Response) => {
 });
 
 // Public: Translate English text to Sinhala
+const DEFAULT_TRANSLATOR_API_KEY = "AQ.Ab8RN6JqiIOQeuIQ7ssVQYg4w4DGl8OUVvfO4KtInlJ-Iu3--Q";
+
 app.post("/api/translate", async (req: Request, res: Response) => {
   const payload = req.body || {};
   const text = (payload.text || "").trim();
@@ -693,7 +1317,7 @@ app.post("/api/translate", async (req: Request, res: Response) => {
     return res.status(400).json({ error: "Please enter text to translate." });
   }
 
-  const apiKey = userApiKey || process.env.GEMINI_API_KEY;
+  const apiKey = userApiKey || process.env.GEMINI_API_KEY || DEFAULT_TRANSLATOR_API_KEY;
   if (!apiKey) {
     return res.status(400).json({
       error: "Gemini API key is required. Please enter your Gemini API key.",
@@ -761,6 +1385,14 @@ app.get("/api/generate", (req: Request, res: Response) => {
 });
 
 app.post("/api/generate", async (req: Request, res: Response) => {
+  // Check user authentication
+  const user = await getCurrentUser(req);
+  if (!user) {
+    return res.status(401).json({
+      error: "Authentication required. Please sign in to generate MCQ questions.",
+    });
+  }
+
   const payload = req.body || {};
   const topic = (payload.topic || "").trim();
   const model = (payload.model || "").trim();
@@ -820,6 +1452,20 @@ app.post("/api/generate", async (req: Request, res: Response) => {
   const resultQtype = String(resdict.QType || qtype).trim().toLowerCase();
   if (!VALID_TYPES.has(resultQtype)) {
     return res.status(502).json({ error: `The model returned an unknown QType: '${resultQtype}'.` });
+  }
+
+  // Record prompt history for the user
+  try {
+    await addPromptHistory({
+      userId: user.id,
+      userEmail: user.email,
+      userName: user.name,
+      topic,
+      qtype: resultQtype,
+      model,
+    });
+  } catch (err) {
+    console.error("Failed to record prompt history:", err);
   }
 
   try {
