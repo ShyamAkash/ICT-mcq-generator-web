@@ -1,19 +1,56 @@
 (() => {
   "use strict";
 
-  // Navigation Tabs
+  // Navigation Tabs & Hamburger Menu
   const tabGenerator = document.getElementById("tab-generator");
   const tabTranslator = document.getElementById("tab-translator");
   const tabGlossary = document.getElementById("tab-glossary");
   const tabAdmin = document.getElementById("tab-admin");
+
+  const hamburgerMenuBtn = document.getElementById("hamburger-menu-btn");
+  const hamburgerDropdown = document.getElementById("hamburger-dropdown");
+  const menuItemGenerator = document.getElementById("menu-item-generator");
+  const menuItemTranslator = document.getElementById("menu-item-translator");
+  const menuItemGlossary = document.getElementById("menu-item-glossary");
+  const menuItemAdmin = document.getElementById("menu-item-admin");
 
   const viewGenerator = document.getElementById("view-generator");
   const viewTranslator = document.getElementById("view-translator");
   const viewGlossary = document.getElementById("view-glossary");
   const viewAdmin = document.getElementById("view-admin");
 
-  // Generator Elements
+  // User Auth Nav Bar
+  const userProfileEl = document.getElementById("user-profile");
+  const userAvatarEl = document.getElementById("user-avatar");
+  const userNameDisplayEl = document.getElementById("user-name-display");
+  const userRoleBadgeEl = document.getElementById("user-role-badge");
+  const headerSigninBtn = document.getElementById("header-signin-btn");
+  const headerLogoutBtn = document.getElementById("header-logout-btn");
+
+  // Generator Auth Required Banner & Form
+  const generatorAuthBanner = document.getElementById("generator-auth-banner");
+  const generatorSigninBtn = document.getElementById("generator-signin-btn");
   const mcqForm = document.getElementById("mcq-form");
+
+  // Auth Modal
+  const authModal = document.getElementById("auth-modal");
+  const authModalOverlay = document.getElementById("auth-modal-overlay");
+  const authModalClose = document.getElementById("auth-modal-close");
+  const googleSigninBtn = document.getElementById("google-signin-btn");
+  const emailAuthForm = document.getElementById("email-auth-form");
+  const authTabLogin = document.getElementById("auth-tab-login");
+  const authTabRegister = document.getElementById("auth-tab-register");
+  const authNameField = document.getElementById("auth-name-field");
+  const authNameInput = document.getElementById("auth-name");
+  const authEmailInput = document.getElementById("auth-email");
+  const authPasswordInput = document.getElementById("auth-password");
+  const authSubmitBtn = document.getElementById("auth-submit-btn");
+  const authStatusEl = document.getElementById("auth-status");
+
+  let authMode = "login"; // "login" or "register"
+  let currentUser = null;
+
+  // Generator Elements
   const apiKeyInput = document.getElementById("api-key");
   const topicInput = document.getElementById("topic");
   const modelInput = document.getElementById("model");
@@ -49,6 +86,17 @@
   const adminContentView = document.getElementById("admin-content-view");
   const adminLogoutBtn = document.getElementById("admin-logout-btn");
 
+  // Admin Subtabs & Sections
+  const adminSubtabUsers = document.getElementById("admin-subtab-users");
+  const adminSubtabVocab = document.getElementById("admin-subtab-vocab");
+  const adminSecUsers = document.getElementById("admin-sec-users");
+  const adminSecVocab = document.getElementById("admin-sec-vocab");
+
+  const adminUsersList = document.getElementById("admin-users-list");
+  const adminPromptSearch = document.getElementById("admin-prompt-search");
+  const adminTypeFilter = document.getElementById("admin-type-filter");
+  const adminPromptsList = document.getElementById("admin-prompts-list");
+
   const adminAddForm = document.getElementById("admin-add-form");
   const adminEnglishInput = document.getElementById("admin-english");
   const adminSinhalaInput = document.getElementById("admin-sinhala");
@@ -56,27 +104,30 @@
   const pendingListEl = document.getElementById("pending-list");
   const adminActiveListEl = document.getElementById("admin-active-list");
 
-  // LocalStorage API Key Persistence
+  let adminPromptsData = [];
+
+  // LocalStorage Keys
   const STORAGE_KEY_API = "gemini_api_key";
+  const STORAGE_KEY_TOKEN = "auth_session_token";
+
+  function getAuthHeaders() {
+    const token = localStorage.getItem(STORAGE_KEY_TOKEN);
+    const headers = { "Content-Type": "application/json" };
+    if (token) {
+      headers["Authorization"] = `Bearer ${token}`;
+    }
+    return headers;
+  }
 
   function initApiKey() {
     const savedKey = localStorage.getItem(STORAGE_KEY_API) || "";
     if (apiKeyInput) apiKeyInput.value = savedKey;
-    if (translateApiKeyInput) translateApiKeyInput.value = savedKey;
+    if (translateApiKeyInput) translateApiKeyInput.value = "";
 
     if (apiKeyInput) {
       apiKeyInput.addEventListener("input", () => {
         const val = apiKeyInput.value.trim();
         localStorage.setItem(STORAGE_KEY_API, val);
-        if (translateApiKeyInput) translateApiKeyInput.value = val;
-      });
-    }
-
-    if (translateApiKeyInput) {
-      translateApiKeyInput.addEventListener("input", () => {
-        const val = translateApiKeyInput.value.trim();
-        localStorage.setItem(STORAGE_KEY_API, val);
-        if (apiKeyInput) apiKeyInput.value = val;
       });
     }
   }
@@ -90,8 +141,10 @@
   }
 
   function setLoading(isLoading) {
-    generateBtn.disabled = isLoading;
-    generateBtn.classList.toggle("is-loading", isLoading);
+    if (generateBtn) {
+      generateBtn.disabled = isLoading;
+      generateBtn.classList.toggle("is-loading", isLoading);
+    }
   }
 
   function filenameFromResponse(response, fallback) {
@@ -100,18 +153,264 @@
     return match ? decodeURIComponent(match[1]) : fallback;
   }
 
+  // Session & User Auth Management
+  async function checkCurrentUserSession() {
+    try {
+      const res = await fetch("/api/auth/me", { headers: getAuthHeaders() });
+      if (res.ok) {
+        const data = await res.json();
+        currentUser = data.user || null;
+      } else {
+        currentUser = null;
+      }
+    } catch (_) {
+      currentUser = null;
+    }
+    updateAuthUI();
+  }
+
+  function isUserAdmin() {
+    return currentUser && (currentUser.email?.toLowerCase() === "sachoice51@gmail.com" || currentUser.role === "admin");
+  }
+
+  function updateAuthUI() {
+    const isAdmin = isUserAdmin();
+
+    if (currentUser) {
+      // User is signed in
+      if (headerSigninBtn) headerSigninBtn.classList.add("is-hidden");
+      if (userProfileEl) userProfileEl.classList.remove("is-hidden");
+      if (userNameDisplayEl) userNameDisplayEl.textContent = currentUser.name || currentUser.email;
+      if (userRoleBadgeEl) userRoleBadgeEl.textContent = isAdmin ? "Admin" : (currentUser.role || "User");
+
+      if (currentUser.picture && userAvatarEl) {
+        userAvatarEl.src = currentUser.picture;
+        userAvatarEl.style.display = "block";
+      } else if (userAvatarEl) {
+        userAvatarEl.style.display = "none";
+      }
+
+      // MCQ Generator access
+      if (generatorAuthBanner) generatorAuthBanner.classList.add("is-hidden");
+      if (mcqForm) mcqForm.classList.remove("is-hidden");
+
+      // Admin access tab & hamburger menu item
+      if (isAdmin) {
+        if (tabAdmin) tabAdmin.classList.remove("is-hidden");
+        if (menuItemAdmin) menuItemAdmin.classList.remove("is-hidden");
+      } else {
+        if (tabAdmin) tabAdmin.classList.add("is-hidden");
+        if (menuItemAdmin) menuItemAdmin.classList.add("is-hidden");
+      }
+    } else {
+      // User is signed out
+      if (userProfileEl) userProfileEl.classList.add("is-hidden");
+      if (headerSigninBtn) headerSigninBtn.classList.remove("is-hidden");
+
+      // MCQ Generator lock banner
+      if (generatorAuthBanner) generatorAuthBanner.classList.remove("is-hidden");
+      if (mcqForm) mcqForm.classList.add("is-hidden");
+
+      // Admin tab & hamburger item strictly hidden when signed out
+      if (tabAdmin) tabAdmin.classList.add("is-hidden");
+      if (menuItemAdmin) menuItemAdmin.classList.add("is-hidden");
+
+      // If user was viewing admin tab, redirect to translator
+      if (window.location.hash === "#admin") {
+        switchTab("translator");
+      }
+    }
+  }
+
+  // Auth Modal Functions
+  function openAuthModal() {
+    if (authModal) authModal.classList.remove("is-hidden");
+    setStatus(authStatusEl, "", "");
+  }
+
+  function closeAuthModal() {
+    if (authModal) authModal.classList.add("is-hidden");
+  }
+
+  if (headerSigninBtn) headerSigninBtn.addEventListener("click", openAuthModal);
+  if (generatorSigninBtn) generatorSigninBtn.addEventListener("click", openAuthModal);
+  if (authModalClose) authModalClose.addEventListener("click", closeAuthModal);
+  if (authModalOverlay) authModalOverlay.addEventListener("click", closeAuthModal);
+
+  // Email / Password Form Submit (Sign In Only)
+  if (emailAuthForm) {
+    emailAuthForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const email = authEmailInput ? authEmailInput.value.trim() : "";
+      const password = authPasswordInput ? authPasswordInput.value.trim() : "";
+
+      if (!email || !password) {
+        setStatus(authStatusEl, "Email and password are required.", "error");
+        return;
+      }
+
+      setStatus(authStatusEl, "Signing in…", "info");
+
+      try {
+        const res = await fetch("/api/auth/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email, password }),
+        });
+
+        const data = await res.json();
+        if (!res.ok || data.error) {
+          throw new Error(data.error || "Invalid email or password.");
+        }
+
+        if (data.user && data.user.token) {
+          localStorage.setItem(STORAGE_KEY_TOKEN, data.user.token);
+        }
+
+        currentUser = data.user;
+        updateAuthUI();
+        closeAuthModal();
+
+        if (authEmailInput) authEmailInput.value = "";
+        if (authPasswordInput) authPasswordInput.value = "";
+      } catch (err) {
+        setStatus(authStatusEl, err.message || "Failed to authenticate.", "error");
+      }
+    });
+  }
+
+  // Google OAuth Popup Trigger
+  if (googleSigninBtn) {
+    googleSigninBtn.addEventListener("click", async () => {
+      try {
+        setStatus(authStatusEl, "Connecting to Google OAuth…", "info");
+        const clientRedirectUri = `${window.location.origin}/api/auth/google/callback`;
+        const res = await fetch(`/api/auth/google/url?redirect_uri=${encodeURIComponent(clientRedirectUri)}`);
+        const data = await res.json();
+
+        if (!data.configured || !data.url) {
+          const redirectUriToUse = data.redirectUri || clientRedirectUri;
+          setStatus(
+            authStatusEl,
+            `Google Client ID is not configured in settings.<br><small style="opacity:0.85;display:block;margin-top:4px;">Authorized Callback URI: <code>${redirectUriToUse}</code></small>`,
+            "error"
+          );
+          return;
+        }
+
+        const width = 500;
+        const height = 600;
+        const left = window.screen.width / 2 - width / 2;
+        const top = window.screen.height / 2 - height / 2;
+
+        window.open(
+          data.url,
+          "google_oauth_popup",
+          `width=${width},height=${height},top=${top},left=${left},scrollbars=yes`
+        );
+      } catch (err) {
+        setStatus(authStatusEl, "Failed to initiate Google OAuth flow.", "error");
+      }
+    });
+  }
+
+  // Listen for OAuth Success/Error message from popup window
+  window.addEventListener("message", (event) => {
+    if (event.data && event.data.type === "OAUTH_AUTH_SUCCESS") {
+      const u = event.data.user;
+      if (u && u.token) {
+        localStorage.setItem(STORAGE_KEY_TOKEN, u.token);
+      }
+      currentUser = u;
+      updateAuthUI();
+      closeAuthModal();
+    } else if (event.data && event.data.type === "OAUTH_AUTH_ERROR") {
+      const errMsg = event.data.error || "Google Sign-In failed.";
+      const clientRedirectUri = `${window.location.origin}/api/auth/google/callback`;
+      if (errMsg.includes("redirect_uri_mismatch") || errMsg.includes("redirect_uri")) {
+        setStatus(
+          authStatusEl,
+          `Google OAuth Redirect URI Mismatch.<br><small style="display:block;margin-top:6px;line-height:1.4;">Add this exact URL to <b>Authorized redirect URIs</b> in Google Cloud Console:<br><code style="background:rgba(0,0,0,0.3);padding:2px 6px;border-radius:4px;word-break:break-all;user-select:all;display:inline-block;margin-top:4px;">${clientRedirectUri}</code></small>`,
+          "error"
+        );
+      } else {
+        setStatus(authStatusEl, errMsg, "error");
+      }
+    }
+  });
+
+  // Header Sign Out Handler
+  if (headerLogoutBtn) {
+    headerLogoutBtn.addEventListener("click", async () => {
+      try {
+        await fetch("/api/auth/logout", {
+          method: "POST",
+          headers: getAuthHeaders(),
+        });
+      } catch (_) {}
+      localStorage.removeItem(STORAGE_KEY_TOKEN);
+      currentUser = null;
+      updateAuthUI();
+    });
+  }
+
+  // Hamburger Menu Dropdown Listener
+  if (hamburgerMenuBtn && hamburgerDropdown) {
+    hamburgerMenuBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const isHidden = hamburgerDropdown.classList.contains("is-hidden");
+      if (isHidden) {
+        hamburgerDropdown.classList.remove("is-hidden");
+        hamburgerMenuBtn.setAttribute("aria-expanded", "true");
+      } else {
+        hamburgerDropdown.classList.add("is-hidden");
+        hamburgerMenuBtn.setAttribute("aria-expanded", "false");
+      }
+    });
+
+    document.addEventListener("click", (e) => {
+      if (!hamburgerDropdown.contains(e.target) && e.target !== hamburgerMenuBtn) {
+        hamburgerDropdown.classList.add("is-hidden");
+        hamburgerMenuBtn.setAttribute("aria-expanded", "false");
+      }
+    });
+  }
+
+  const bindMenuItem = (el, targetTab) => {
+    if (el) {
+      el.addEventListener("click", () => {
+        switchTab(targetTab);
+        if (hamburgerDropdown) hamburgerDropdown.classList.add("is-hidden");
+        if (hamburgerMenuBtn) hamburgerMenuBtn.setAttribute("aria-expanded", "false");
+      });
+    }
+  };
+
+  bindMenuItem(menuItemGenerator, "generator");
+  bindMenuItem(menuItemTranslator, "translator");
+  bindMenuItem(menuItemGlossary, "glossary");
+  bindMenuItem(menuItemAdmin, "admin");
+
   // Check URL Hash for Admin mode
   function checkAdminAccess() {
-    if (window.location.hash === "#admin") {
-      tabAdmin.classList.remove("is-hidden");
-      switchTab("admin");
+    const isAdmin = isUserAdmin();
+    if (isAdmin) {
+      if (tabAdmin) tabAdmin.classList.remove("is-hidden");
+      if (menuItemAdmin) menuItemAdmin.classList.remove("is-hidden");
+      if (window.location.hash === "#admin") {
+        switchTab("admin");
+      }
     } else {
-      tabAdmin.classList.add("is-hidden");
+      if (tabAdmin) tabAdmin.classList.add("is-hidden");
+      if (menuItemAdmin) menuItemAdmin.classList.add("is-hidden");
+      if (window.location.hash === "#admin") {
+        switchTab("translator");
+      }
     }
   }
 
   function isAdminAuthenticated() {
-    return sessionStorage.getItem("admin_authenticated") === "true";
+    return isUserAdmin();
   }
 
   function updateAdminView() {
@@ -127,7 +426,8 @@
 
   // View Switching
   function switchTab(target) {
-    // Deactivate all
+    const isAdmin = isUserAdmin();
+
     [tabGenerator, tabTranslator, tabGlossary, tabAdmin].forEach((t) => {
       if (t) {
         t.classList.remove("is-active");
@@ -138,32 +438,55 @@
       if (v) v.classList.add("is-hidden");
     });
 
+    [menuItemGenerator, menuItemTranslator, menuItemGlossary, menuItemAdmin].forEach((m) => {
+      if (m) m.classList.remove("active");
+    });
+
     if (target === "admin") {
-      tabAdmin.classList.remove("is-hidden");
-      tabAdmin.classList.add("is-active");
-      tabAdmin.setAttribute("aria-selected", "true");
-      viewAdmin.classList.remove("is-hidden");
+      if (tabAdmin) {
+        tabAdmin.classList.remove("is-hidden");
+        tabAdmin.classList.add("is-active");
+        tabAdmin.setAttribute("aria-selected", "true");
+      }
+      if (menuItemAdmin) {
+        menuItemAdmin.classList.remove("is-hidden");
+        menuItemAdmin.classList.add("active");
+      }
+      if (viewAdmin) viewAdmin.classList.remove("is-hidden");
       window.location.hash = "admin";
       updateAdminView();
     } else {
       if (window.location.hash === "#admin") {
         history.replaceState(null, "", " ");
       }
-      tabAdmin.classList.add("is-hidden");
+      if (!isAdmin && window.location.hash !== "#admin") {
+        if (tabAdmin) tabAdmin.classList.add("is-hidden");
+        if (menuItemAdmin) menuItemAdmin.classList.add("is-hidden");
+      }
 
-      if (target === "translator") {
-        tabTranslator.classList.add("is-active");
-        tabTranslator.setAttribute("aria-selected", "true");
-        viewTranslator.classList.remove("is-hidden");
+      if (target === "generator") {
+        if (tabGenerator) {
+          tabGenerator.classList.add("is-active");
+          tabGenerator.setAttribute("aria-selected", "true");
+        }
+        if (menuItemGenerator) menuItemGenerator.classList.add("active");
+        if (viewGenerator) viewGenerator.classList.remove("is-hidden");
       } else if (target === "glossary") {
-        tabGlossary.classList.add("is-active");
-        tabGlossary.setAttribute("aria-selected", "true");
-        viewGlossary.classList.remove("is-hidden");
+        if (tabGlossary) {
+          tabGlossary.classList.add("is-active");
+          tabGlossary.setAttribute("aria-selected", "true");
+        }
+        if (menuItemGlossary) menuItemGlossary.classList.add("active");
+        if (viewGlossary) viewGlossary.classList.remove("is-hidden");
         fetchGlossary();
       } else {
-        tabGenerator.classList.add("is-active");
-        tabGenerator.setAttribute("aria-selected", "true");
-        viewGenerator.classList.remove("is-hidden");
+        // Default to Translator homepage
+        if (tabTranslator) {
+          tabTranslator.classList.add("is-active");
+          tabTranslator.setAttribute("aria-selected", "true");
+        }
+        if (menuItemTranslator) menuItemTranslator.classList.add("active");
+        if (viewTranslator) viewTranslator.classList.remove("is-hidden");
       }
     }
   }
@@ -197,9 +520,31 @@
     });
   }
 
+  // Admin Subtab Navigation
+  if (adminSubtabUsers && adminSubtabVocab) {
+    adminSubtabUsers.addEventListener("click", () => {
+      adminSubtabUsers.classList.add("is-active");
+      adminSubtabVocab.classList.remove("is-active");
+      adminSecUsers.classList.remove("is-hidden");
+      adminSecVocab.classList.add("is-hidden");
+    });
+
+    adminSubtabVocab.addEventListener("click", () => {
+      adminSubtabVocab.classList.add("is-active");
+      adminSubtabUsers.classList.remove("is-active");
+      adminSecVocab.classList.remove("is-hidden");
+      adminSecUsers.classList.add("is-hidden");
+    });
+  }
+
   // Generator Handler
   async function handleGenerate(event) {
     event.preventDefault();
+
+    if (!currentUser) {
+      openAuthModal();
+      return;
+    }
 
     const apiKey = apiKeyInput ? apiKeyInput.value.trim() : "";
     const topic = topicInput.value.trim();
@@ -228,7 +573,7 @@
     try {
       const response = await fetch("/api/generate", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: getAuthHeaders(),
         body: JSON.stringify({ apiKey, topic, model, qtype }),
       });
 
@@ -272,16 +617,10 @@
   async function handleTranslate(event) {
     event.preventDefault();
 
-    const apiKey = (translateApiKeyInput && translateApiKeyInput.value.trim()) || (apiKeyInput && apiKeyInput.value.trim()) || "";
+    const apiKey = (translateApiKeyInput && translateApiKeyInput.value.trim()) || "";
     const text = translateSourceInput ? translateSourceInput.value.trim() : "";
     const model = modelInput ? modelInput.value.trim() : "gemini-3.6-flash";
 
-    if (!apiKey) {
-      setStatus(translateStatusEl, "Please enter your Gemini API Key.", "error");
-      if (translateApiKeyInput) translateApiKeyInput.focus();
-      else if (apiKeyInput) apiKeyInput.focus();
-      return;
-    }
     if (!text) {
       setStatus(translateStatusEl, "Please enter English text to translate.", "error");
       if (translateSourceInput) translateSourceInput.focus();
@@ -444,25 +783,116 @@
     suggestForm.addEventListener("submit", handleSuggest);
   }
 
-  // Admin Logic
+  // Admin Data & Logic
   async function fetchAdminData() {
     try {
-      const [pendingRes, activeRes] = await Promise.all([
-        fetch("/api/admin/pending"),
+      const headers = getAuthHeaders();
+      headers["x-admin-pass"] = "ictfromabcadmin";
+
+      const [pendingRes, activeRes, usersRes, promptsRes] = await Promise.all([
+        fetch("/api/admin/pending", { headers }),
         fetch("/api/vocabulary"),
+        fetch("/api/admin/users", { headers }),
+        fetch("/api/admin/prompts", { headers }),
       ]);
 
       const pending = pendingRes.ok ? await pendingRes.json() : [];
       const active = activeRes.ok ? await activeRes.json() : [];
+      const users = usersRes.ok ? await usersRes.json() : [];
+      adminPromptsData = promptsRes.ok ? await promptsRes.json() : [];
 
       renderAdminPending(pending);
       renderAdminActive(active);
+      renderAdminUsers(users);
+      renderAdminPrompts();
     } catch (err) {
       setStatus(adminStatusEl, "Error loading admin data.", "error");
     }
   }
 
+  function renderAdminUsers(users) {
+    if (!adminUsersList) return;
+    adminUsersList.innerHTML = "";
+
+    if (!users || users.length === 0) {
+      adminUsersList.innerHTML = `<tr><td colspan="5" class="empty-vocab">No registered users yet.</td></tr>`;
+      return;
+    }
+
+    users.forEach((u) => {
+      const tr = document.createElement("tr");
+      const dateStr = u.created_at ? new Date(u.created_at).toLocaleDateString() : "N/A";
+      const authProvider = (u.auth_provider || "google").toUpperCase();
+
+      tr.innerHTML = `
+        <td><strong>${escapeHtml(u.name || "User")}</strong></td>
+        <td>${escapeHtml(u.email)}</td>
+        <td><span class="user-role-badge">${escapeHtml(authProvider)}</span></td>
+        <td><span class="user-role-badge" style="${u.role === "admin" ? "color:#ef4444;" : ""}">${escapeHtml(u.role || "user")}</span></td>
+        <td>${dateStr}</td>
+      `;
+      adminUsersList.appendChild(tr);
+    });
+  }
+
+  function renderAdminPrompts() {
+    if (!adminPromptsList) return;
+    adminPromptsList.innerHTML = "";
+
+    const searchTerm = (adminPromptSearch ? adminPromptSearch.value.trim().toLowerCase() : "");
+    const selectedType = (adminTypeFilter ? adminTypeFilter.value.toLowerCase() : "all");
+
+    const filtered = adminPromptsData.filter((item) => {
+      const matchSearch =
+        !searchTerm ||
+        (item.user_email && item.user_email.toLowerCase().includes(searchTerm)) ||
+        (item.user_name && item.user_name.toLowerCase().includes(searchTerm)) ||
+        (item.topic && item.topic.toLowerCase().includes(searchTerm));
+
+      const matchType = selectedType === "all" || item.qtype === selectedType;
+      return matchSearch && matchType;
+    });
+
+    if (filtered.length === 0) {
+      adminPromptsList.innerHTML = `<div class="empty-vocab">No question generation prompts found.</div>`;
+      return;
+    }
+
+    filtered.forEach((p) => {
+      const card = document.createElement("div");
+      card.className = "prompt-card";
+
+      const dateStr = p.created_at ? new Date(p.created_at).toLocaleString() : "";
+      const qtypeClass = p.qtype || "normal";
+
+      card.innerHTML = `
+        <div class="prompt-card-header">
+          <div class="prompt-user-info">
+            <span>${escapeHtml(p.user_name || "User")}</span>
+            <span class="prompt-user-email">(${escapeHtml(p.user_email || "")})</span>
+          </div>
+          <span class="qtype-tag ${qtypeClass}">${escapeHtml(p.qtype || "normal")}</span>
+        </div>
+        <div class="prompt-topic-text">${escapeHtml(p.topic || "")}</div>
+        <div class="prompt-meta-footer">
+          <span>Model: ${escapeHtml(p.model || "gemini-3.6-flash")}</span>
+          <span>${dateStr}</span>
+        </div>
+      `;
+
+      adminPromptsList.appendChild(card);
+    });
+  }
+
+  if (adminPromptSearch) {
+    adminPromptSearch.addEventListener("input", renderAdminPrompts);
+  }
+  if (adminTypeFilter) {
+    adminTypeFilter.addEventListener("change", renderAdminPrompts);
+  }
+
   function renderAdminPending(pendingList) {
+    if (!pendingListEl) return;
     pendingListEl.innerHTML = "";
     if (!pendingList || pendingList.length === 0) {
       pendingListEl.innerHTML = `<div class="empty-vocab">No pending translation suggestions.</div>`;
@@ -506,6 +936,7 @@
   }
 
   function renderAdminActive(activeList) {
+    if (!adminActiveListEl) return;
     adminActiveListEl.innerHTML = "";
     if (!activeList || activeList.length === 0) {
       adminActiveListEl.innerHTML = `<div class="empty-vocab">No active prompt translations.</div>`;
@@ -545,9 +976,12 @@
   async function approveSuggestion(id) {
     try {
       setStatus(adminStatusEl, "Approving suggestion…", "info");
+      const headers = getAuthHeaders();
+      headers["x-admin-pass"] = "ictfromabcadmin";
+
       const res = await fetch("/api/admin/approve", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers,
         body: JSON.stringify({ id }),
       });
 
@@ -567,9 +1001,12 @@
   async function rejectSuggestion(id) {
     try {
       setStatus(adminStatusEl, "Rejecting suggestion…", "info");
+      const headers = getAuthHeaders();
+      headers["x-admin-pass"] = "ictfromabcadmin";
+
       const res = await fetch("/api/admin/reject", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers,
         body: JSON.stringify({ id }),
       });
 
@@ -597,9 +1034,12 @@
 
     try {
       setStatus(adminStatusEl, "Adding to prompt file…", "info");
+      const headers = getAuthHeaders();
+      headers["x-admin-pass"] = "ictfromabcadmin";
+
       const res = await fetch("/api/admin/add", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers,
         body: JSON.stringify({ english, sinhala }),
       });
 
@@ -620,9 +1060,12 @@
   async function adminDeleteWord(english) {
     try {
       setStatus(adminStatusEl, `Deleting "${english}" from prompt file…`, "info");
+      const headers = getAuthHeaders();
+      headers["x-admin-pass"] = "ictfromabcadmin";
+
       const res = await fetch("/api/admin/delete", {
         method: "DELETE",
-        headers: { "Content-Type": "application/json" },
+        headers,
         body: JSON.stringify({ english }),
       });
 
@@ -642,7 +1085,17 @@
     adminAddForm.addEventListener("submit", adminAddWord);
   }
 
-  // Init
+  function escapeHtml(str) {
+    return String(str || "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#039;");
+  }
+
+  // Initialization
   initApiKey();
+  checkCurrentUserSession();
   checkAdminAccess();
 })();

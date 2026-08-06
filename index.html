@@ -11,20 +11,84 @@
 <link rel="stylesheet" href="static/style.css">
 </head>
 <body>
+  <!-- Fixed Top-Left Site Navigation Menu -->
+  <div class="site-hamburger-bar">
+    <div class="hamburger-container">
+      <button type="button" id="hamburger-menu-btn" class="hamburger-btn" aria-label="Open navigation menu" aria-expanded="false" aria-haspopup="true">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <line x1="3" y1="12" x2="21" y2="12"></line>
+          <line x1="3" y1="6" x2="21" y2="6"></line>
+          <line x1="3" y1="18" x2="21" y2="18"></line>
+        </svg>
+        <span class="hamburger-label">Menu</span>
+      </button>
+
+      <!-- Hamburger Dropdown Menu -->
+      <div id="hamburger-dropdown" class="hamburger-dropdown is-hidden" role="menu">
+        <div class="menu-label">Navigation Menu</div>
+        <button type="button" id="menu-item-translator" class="menu-item active" role="menuitem">
+          <span class="menu-icon">🌐</span>
+          <span class="menu-text">Translator</span>
+        </button>
+        <button type="button" id="menu-item-generator" class="menu-item" role="menuitem">
+          <span class="menu-icon">📝</span>
+          <span class="menu-text">MCQ Generator</span>
+        </button>
+        <button type="button" id="menu-item-glossary" class="menu-item" role="menuitem">
+          <span class="menu-icon">📖</span>
+          <span class="menu-text">Glossary</span>
+        </button>
+        <button type="button" id="menu-item-admin" class="menu-item menu-item-admin is-hidden" role="menuitem">
+          <span class="menu-icon">🛡️</span>
+          <span class="menu-text">Admin Portal</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
   <div class="page">
     <main class="card">
       <header class="top-nav">
-        <h1 class="app-title"><span class="brand-ict">ict</span>fromabc<br><span class="title-sub">Quiz Helper</span></h1>
-        <nav class="nav-tabs" role="tablist">
-          <button type="button" id="tab-generator" class="tab-btn is-active" role="tab" aria-selected="true" aria-controls="view-generator">MCQ Generator</button>
-          <button type="button" id="tab-translator" class="tab-btn" role="tab" aria-selected="false" aria-controls="view-translator">Translator</button>
-          <button type="button" id="tab-glossary" class="tab-btn" role="tab" aria-selected="false" aria-controls="view-glossary">Glossary</button>
-          <button type="button" id="tab-admin" class="tab-btn is-hidden" role="tab" aria-selected="false" aria-controls="view-admin">Admin Portal</button>
-        </nav>
+        <div class="nav-left">
+          <div class="brand-row">
+            <h1 class="app-title"><span class="brand-ict">ict</span>fromabc<br><span class="title-sub">Quiz Helper</span></h1>
+          </div>
+        </div>
+        
+        <div class="nav-right">
+          <nav class="nav-tabs" role="tablist">
+            <button type="button" id="tab-translator" class="tab-btn is-active" role="tab" aria-selected="true" aria-controls="view-translator">Translator</button>
+            <button type="button" id="tab-glossary" class="tab-btn" role="tab" aria-selected="false" aria-controls="view-glossary">Glossary</button>
+            <button type="button" id="tab-generator" class="tab-btn is-hidden" role="tab" aria-selected="false" aria-controls="view-generator">MCQ Generator</button>
+            <button type="button" id="tab-admin" class="tab-btn is-hidden" role="tab" aria-selected="false" aria-controls="view-admin">Admin Portal</button>
+          </nav>
+
+          <!-- User Auth Bar -->
+          <div id="user-nav-bar" class="user-nav-bar">
+            <div id="user-profile" class="user-profile is-hidden">
+              <img id="user-avatar" class="user-avatar" src="" alt="Avatar" style="display:none;">
+              <div class="user-info-text">
+                <span id="user-name-display" class="user-name">User</span>
+                <span id="user-role-badge" class="user-role-badge">User</span>
+              </div>
+              <button type="button" id="header-logout-btn" class="btn-sm btn-logout">Sign Out</button>
+            </div>
+            <button type="button" id="header-signin-btn" class="btn-sm btn-signin">Sign In / Register</button>
+          </div>
+        </div>
       </header>
 
       <!-- Generator View -->
-      <section id="view-generator" class="view-panel" role="tabpanel">
+      <section id="view-generator" class="view-panel is-hidden" role="tabpanel">
+        <!-- Auth Required Notice (shown if not logged in) -->
+        <div id="generator-auth-banner" class="auth-required-card is-hidden">
+          <div class="auth-required-icon">🔒</div>
+          <h3>Sign In Required</h3>
+          <p>You must sign in to generate custom MCQ Word (.docx) documents. Sign in with Google or your email below.</p>
+          <p class="auth-banner-sub"><em>Note: Translator and Glossary features remain free to use without signing in!</em></p>
+          <button type="button" id="generator-signin-btn" class="generate-btn" style="margin-top: 12px;">Sign In or Register</button>
+        </div>
+
         <form id="mcq-form" novalidate>
           <div class="field">
             <div class="label-row">
@@ -97,12 +161,12 @@
       </section>
 
       <!-- Translator View -->
-      <section id="view-translator" class="view-panel is-hidden" role="tabpanel">
+      <section id="view-translator" class="view-panel" role="tabpanel">
         <form id="translate-form" novalidate>
           <div class="field">
             <div class="label-row">
               <label for="translate-api-key">Gemini API Key</label>
-              <span class="sub-label">Saved in browser cache</span>
+              <span class="sub-label">Optional (Custom key if default limit exceeded)</span>
             </div>
             <input
               type="password"
@@ -110,6 +174,7 @@
               name="translate-api-key"
               class="mono-input"
               autocomplete="off"
+              placeholder="default model එකේ limit පැනලනන් API key එකක් හදල මෙතෙන්ට දාන්න"
             >
           </div>
 
@@ -144,7 +209,7 @@
               name="translate-result"
               rows="5"
               readonly
-              placeholder="Translated Sinhala text will appear here..."
+              placeholder="iskayf,ka 🥱"
             ></textarea>
           </div>
         </form>
@@ -185,7 +250,7 @@
 
       <!-- Secret Admin View -->
       <section id="view-admin" class="view-panel is-hidden" role="tabpanel">
-        <!-- Admin Login Screen -->
+        <!-- Admin Password Form -->
         <div id="admin-login-view" class="admin-login-card">
           <div class="admin-badge">Admin Authentication</div>
           <form id="admin-login-form">
@@ -205,50 +270,94 @@
             <button type="button" id="admin-logout-btn" class="btn-sm btn-delete">Lock Portal</button>
           </div>
 
-          <!-- Direct Add Form -->
-          <form id="admin-add-form" class="vocab-add-form">
-            <div class="section-heading">Directly Add / Update Vocabulary</div>
-            <div class="vocab-input-group">
-              <div class="field">
-                <label for="admin-english">English Word</label>
-                <input type="text" id="admin-english" placeholder="e.g. Router" required>
-              </div>
-              <div class="field">
-                <label for="admin-sinhala">Sinhala Translation</label>
-                <input type="text" id="admin-sinhala" placeholder="e.g. රවුටරය" required>
-              </div>
+          <!-- Sub-navigation for Admin Sections -->
+          <div class="admin-subtabs">
+            <button type="button" id="admin-subtab-users" class="subtab-btn is-active">Users & Prompts</button>
+            <button type="button" id="admin-subtab-vocab" class="subtab-btn">Vocabulary Mappings</button>
+          </div>
+
+          <!-- Admin Section 1: Registered Users & User Prompts -->
+          <div id="admin-sec-users" class="admin-section">
+            <div class="section-heading">Registered Accounts & User Directory</div>
+            <div class="admin-table-wrapper">
+              <table class="admin-table">
+                <thead>
+                  <tr>
+                    <th>User</th>
+                    <th>Email</th>
+                    <th>Auth Method</th>
+                    <th>Role</th>
+                    <th>Registered Date</th>
+                  </tr>
+                </thead>
+                <tbody id="admin-users-list">
+                  <!-- Dynamically populated -->
+                </tbody>
+              </table>
             </div>
-            <button type="submit" id="admin-add-btn" class="generate-btn vocab-submit-btn">Add Directly to Prompt</button>
-          </form>
 
-          <p id="admin-status" class="status" role="status" aria-live="polite"></p>
-
-          <!-- Pending Suggestions Section -->
-          <div class="vocab-section">
-            <div class="section-heading">Pending User Suggestions</div>
-            <div id="pending-list-wrapper" class="vocab-list-wrapper">
-              <div class="vocab-header admin-header">
-                <span>English</span>
-                <span>Sinhala</span>
-                <span class="text-right">Actions</span>
-              </div>
-              <div id="pending-list" class="vocab-list">
-                <!-- Dynamically populated -->
-              </div>
+            <div class="section-heading" style="margin-top: 24px;">Question Generation Prompts (Separated By User & Type)</div>
+            <div class="prompt-filter-bar">
+              <input type="text" id="admin-prompt-search" placeholder="Search prompts or user email..." class="search-input">
+              <select id="admin-type-filter" class="type-select">
+                <option value="all">All Question Types</option>
+                <option value="normal">Normal</option>
+                <option value="statement">Statement</option>
+                <option value="code">Code</option>
+              </select>
+            </div>
+            <div id="admin-prompts-list" class="admin-prompts-container">
+              <!-- Dynamically populated -->
             </div>
           </div>
 
-          <!-- Approved Active Mappings Section -->
-          <div class="vocab-section">
-            <div class="section-heading">Active Prompt Vocabulary</div>
-            <div class="vocab-list-wrapper">
-              <div class="vocab-header admin-header">
-                <span>English</span>
-                <span>Sinhala</span>
-                <span class="text-right">Action</span>
+          <!-- Admin Section 2: Vocabulary Management -->
+          <div id="admin-sec-vocab" class="admin-section is-hidden">
+            <!-- Direct Add Form -->
+            <form id="admin-add-form" class="vocab-add-form">
+              <div class="section-heading">Directly Add / Update Vocabulary</div>
+              <div class="vocab-input-group">
+                <div class="field">
+                  <label for="admin-english">English Word</label>
+                  <input type="text" id="admin-english" placeholder="e.g. Router" required>
+                </div>
+                <div class="field">
+                  <label for="admin-sinhala">Sinhala Translation</label>
+                  <input type="text" id="admin-sinhala" placeholder="e.g. රවුටරය" required>
+                </div>
               </div>
-              <div id="admin-active-list" class="vocab-list">
-                <!-- Dynamically populated -->
+              <button type="submit" id="admin-add-btn" class="generate-btn vocab-submit-btn">Add Directly to Prompt</button>
+            </form>
+
+            <p id="admin-status" class="status" role="status" aria-live="polite"></p>
+
+            <!-- Pending Suggestions Section -->
+            <div class="vocab-section" style="margin-top: 16px;">
+              <div class="section-heading">Pending User Suggestions</div>
+              <div id="pending-list-wrapper" class="vocab-list-wrapper">
+                <div class="vocab-header admin-header">
+                  <span>English</span>
+                  <span>Sinhala</span>
+                  <span class="text-right">Actions</span>
+                </div>
+                <div id="pending-list" class="vocab-list">
+                  <!-- Dynamically populated -->
+                </div>
+              </div>
+            </div>
+
+            <!-- Approved Active Mappings Section -->
+            <div class="vocab-section" style="margin-top: 16px;">
+              <div class="section-heading">Active Prompt Vocabulary</div>
+              <div class="vocab-list-wrapper">
+                <div class="vocab-header admin-header">
+                  <span>English</span>
+                  <span>Sinhala</span>
+                  <span class="text-right">Action</span>
+                </div>
+                <div id="admin-active-list" class="vocab-list">
+                  <!-- Dynamically populated -->
+                </div>
               </div>
             </div>
           </div>
@@ -261,6 +370,45 @@
     <footer class="app-footer">
       <a href="https://github.com/ShyamAkash" target="_blank" rel="noopener noreferrer" class="developed-by">Developed by zyppy</a>
     </footer>
+  </div>
+
+  <!-- Sign In / Register Modal -->
+  <div id="auth-modal" class="auth-modal is-hidden" role="dialog" aria-modal="true" aria-labelledby="auth-modal-title">
+    <div class="auth-modal-overlay" id="auth-modal-overlay"></div>
+    <div class="auth-modal-card">
+      <button type="button" id="auth-modal-close" class="modal-close-btn">&times;</button>
+      <h2 id="auth-modal-title" class="auth-title">Welcome to ictfromabc</h2>
+      <p class="auth-subtitle">New users register with Google. Existing accounts sign in below.</p>
+
+      <!-- Google Sign In Button -->
+      <button type="button" id="google-signin-btn" class="google-auth-btn">
+        <svg class="google-icon" width="18" height="18" viewBox="0 0 18 18">
+          <path fill="#4285F4" d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844a4.14 4.14 0 0 1-1.796 2.716v2.259h2.908c1.702-1.567 2.684-3.875 2.684-6.616z"/>
+          <path fill="#34A853" d="M9 18c2.43 0 4.467-.806 5.956-2.18l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18z"/>
+          <path fill="#FBBC05" d="M3.964 10.71A5.41 5.41 0 0 1 3.682 9c0-.593.102-1.17.282-1.71V4.958H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.042l3.007-2.332z"/>
+          <path fill="#EA4335" d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.958L3.964 7.29C4.672 5.163 6.656 3.58 9 3.58z"/>
+        </svg>
+        <span>Continue with Google</span>
+      </button>
+
+      <div class="auth-divider"><span>OR SIGN IN WITH EXISTING EMAIL</span></div>
+
+      <!-- Email / Password Form (Sign In Only) -->
+      <form id="email-auth-form" class="auth-form">
+        <div class="field">
+          <label for="auth-email">Email Address</label>
+          <input type="email" id="auth-email" placeholder="name@example.com" required>
+        </div>
+
+        <div class="field">
+          <label for="auth-password">Password</label>
+          <input type="password" id="auth-password" placeholder="••••••••" required>
+        </div>
+
+        <button type="submit" id="auth-submit-btn" class="generate-btn">Sign In</button>
+        <p id="auth-status" class="status" role="status" aria-live="polite"></p>
+      </form>
+    </div>
   </div>
 
   <script src="static/script.js"></script>
