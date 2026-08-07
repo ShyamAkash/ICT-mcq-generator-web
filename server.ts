@@ -1304,23 +1304,20 @@ app.delete("/api/admin/delete", async (req: Request, res: Response) => {
   }
 });
 
-// Public: Translate English text to Sinhala
-const DEFAULT_TRANSLATOR_API_KEY = "AQ.Ab8RN6JtZrppa-F4ZIzSE5iZvYjlnzO_bu0FMroT1nfDSm2Nww";
 
 app.post("/api/translate", async (req: Request, res: Response) => {
   const payload = req.body || {};
   const text = (payload.text || "").trim();
   const model = (payload.model || "gemini-3.6-flash").trim();
-  const userApiKey = (payload.apiKey || req.headers["x-api-key"] || "").toString().trim();
 
   if (!text) {
     return res.status(400).json({ error: "Please enter text to translate." });
   }
 
-  const apiKey = userApiKey || process.env.GEMINI_API_KEY || DEFAULT_TRANSLATOR_API_KEY;
+  const apiKey = process.env.GEMINI_API_KEY_TRANSLATE;
   if (!apiKey) {
-    return res.status(400).json({
-      error: "Gemini API key is required. Please enter your Gemini API key.",
+    return res.status(500).json({
+      error: "The server is missing its Gemini API configuration.",
     });
   }
 
