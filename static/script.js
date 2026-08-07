@@ -113,7 +113,11 @@
   const STORAGE_KEY_TOKEN = "auth_session_token";
 
   function getAuthHeaders() {
-    const token = localStorage.getItem(STORAGE_KEY_TOKEN);
+    let token = localStorage.getItem(STORAGE_KEY_TOKEN);
+    if (token === "[object Object]" || (token && token.startsWith("{"))) {
+      localStorage.removeItem(STORAGE_KEY_TOKEN);
+      token = null;
+    }
     const headers = { "Content-Type": "application/json" };
     if (token) {
       headers["Authorization"] = `Bearer ${token}`;
@@ -121,15 +125,34 @@
     return headers;
   }
 
+  function getUserApiKey() {
+    return (
+      (apiKeyInput ? apiKeyInput.value.trim() : "") ||
+      (translateApiKeyInput ? translateApiKeyInput.value.trim() : "") ||
+      localStorage.getItem(STORAGE_KEY_API) ||
+      ""
+    );
+  }
+
   function initApiKey() {
     const savedKey = localStorage.getItem(STORAGE_KEY_API) || "";
     if (apiKeyInput) apiKeyInput.value = savedKey;
-    if (translateApiKeyInput) translateApiKeyInput.value = "";
+    if (translateApiKeyInput) translateApiKeyInput.value = savedKey;
+
+    const syncApiKey = (val) => {
+      localStorage.setItem(STORAGE_KEY_API, val);
+      if (apiKeyInput && apiKeyInput.value !== val) apiKeyInput.value = val;
+      if (translateApiKeyInput && translateApiKeyInput.value !== val) translateApiKeyInput.value = val;
+    };
 
     if (apiKeyInput) {
       apiKeyInput.addEventListener("input", () => {
-        const val = apiKeyInput.value.trim();
-        localStorage.setItem(STORAGE_KEY_API, val);
+        syncApiKey(apiKeyInput.value.trim());
+      });
+    }
+    if (translateApiKeyInput) {
+      translateApiKeyInput.addEventListener("input", () => {
+        syncApiKey(translateApiKeyInput.value.trim());
       });
     }
   }
@@ -214,7 +237,7 @@
       }
       if (suggestRoleNote) {
         if (isAcademicOrAdmin) {
-          suggestRoleNote.textContent = "⚡ Academic Staff Privilege: Word mappings submitted by you are added directly to the prompt without requiring approval.";
+          suggestRoleNote.textContent = "Academic Staff Privilege: Word mappings submitted by you are added directly to the prompt without requiring approval.";
           suggestRoleNote.style.display = "block";
         } else {
           suggestRoleNote.style.display = "none";
@@ -323,8 +346,9 @@
 
   function handleAuthSuccess(u) {
     if (!u) return;
-    if (u.token) {
-      localStorage.setItem(STORAGE_KEY_TOKEN, u.token);
+    const tokenStr = typeof u.token === "object" ? u.token?.id : u.token;
+    if (tokenStr && typeof tokenStr === "string") {
+      localStorage.setItem(STORAGE_KEY_TOKEN, tokenStr);
     }
     currentUser = u;
     updateAuthUI();
@@ -681,16 +705,11 @@
       return;
     }
 
-    const apiKey = apiKeyInput ? apiKeyInput.value.trim() : "";
+    const apiKey = getUserApiKey();
     const topic = topicInput.value.trim();
     const model = modelInput.value.trim();
     const qtype = mcqForm.querySelector('input[name="qtype"]:checked').value;
 
-    if (!apiKey) {
-      setStatus(statusEl, "Please enter your Gemini API Key first.", "error");
-      apiKeyInput.focus();
-      return;
-    }
     if (!topic) {
       setStatus(statusEl, "Please describe the question or provide a reference question.", "error");
       topicInput.focus();
@@ -752,7 +771,7 @@
   async function handleTranslate(event) {
     event.preventDefault();
 
-    const apiKey = (translateApiKeyInput && translateApiKeyInput.value.trim()) || "";
+    const apiKey = getUserApiKey();
     const text = translateSourceInput ? translateSourceInput.value.trim() : "";
     const model = modelInput ? modelInput.value.trim() : "gemini-3.6-flash";
 
@@ -920,7 +939,7 @@
       if (data.direct) {
         setStatus(
           suggestStatusEl,
-          "⚡ Word mapping directly added to the prompt by Academic Staff / Admin!",
+          "Word mapping directly added to the prompt by Academic Staff / Admin!",
           "success"
         );
         if (data.vocabulary) {

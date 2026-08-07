@@ -94,7 +94,7 @@
           <div class="field">
             <div class="label-row">
               <label for="api-key">Gemini API Key</label>
-              <span class="sub-label">Saved in browser cache</span>
+              <span class="sub-label">Optional (Custom key if default limit exceeded)</span>
             </div>
             <input
               type="password"
@@ -102,6 +102,7 @@
               name="api-key"
               class="mono-input"
               autocomplete="off"
+              placeholder="default model එකේ limit පැනලනන් API key එකක් හදල මෙතෙන්ට දාන්න"
             >
           </div>
 
@@ -221,7 +222,7 @@
         <div class="glossary-container">
           <form id="suggest-form" class="vocab-add-form">
             <div id="suggest-heading" class="section-heading">Suggest a Translation</div>
-            <p id="suggest-role-note" style="font-size: 13px; color: #2563eb; margin-bottom: 12px; display: none; font-weight: 500; line-height: 1.4;"></p>
+            <p id="suggest-role-note" style="display: none;"></p>
             <div class="vocab-input-group">
               <div class="field">
                 <label for="suggest-english">English Word</label>
