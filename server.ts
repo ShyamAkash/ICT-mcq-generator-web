@@ -12,6 +12,35 @@ import { ConvertToLegacy } from "./src/UnicodeToLegacy.js";
 
 dotenv.config();
 
+const ENGLISH_TERM_RE = /[A-Za-z0-9]+(?:[ \-][A-Za-z0-9]+)*/g;
+
+interface TextSegment {
+  text: string;
+  isEnglish: boolean;
+}
+
+// Splits Sinhala text into (Sinhala | English) chunks, converting only the
+// Sinhala chunks to the legacy encoding. English acronyms/terms embedded in
+// the sentence (GPU, CPU, RAM...) are left as-is so they can be rendered in
+// Times New Roman instead of the legacy Sinhala font.
+function toLegacySegments(text: string): TextSegment[] {
+  const segments: TextSegment[] = [];
+  let pos = 0;
+  let m: RegExpExecArray | null;
+  ENGLISH_TERM_RE.lastIndex = 0;
+  while ((m = ENGLISH_TERM_RE.exec(text)) !== null) {
+    if (m.index > pos) {
+      segments.push({ text: ConvertToLegacy(text.slice(pos, m.index)), isEnglish: false });
+    }
+    segments.push({ text: m[0], isEnglish: true });
+    pos = m.index + m[0].length;
+  }
+  if (pos < text.length) {
+    segments.push({ text: ConvertToLegacy(text.slice(pos)), isEnglish: false });
+  }
+  return segments;
+}
+
 const app = express();
 const PORT = 3000;
 
@@ -28,6 +57,7 @@ const TMP_PENDING_VOCAB_PATH = path.join("/tmp", "pending_vocab.json");
 const TMP_USERS_PATH = path.join("/tmp", "users.json");
 const TMP_SESSIONS_PATH = path.join("/tmp", "sessions.json");
 const TMP_PROMPT_HISTORY_PATH = path.join("/tmp", "prompt_history.json");
+const TMP_TRANSLATION_HISTORY_PATH = path.join("/tmp", "translation_history.json");
 
 const KV_URL = process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL;
 const KV_TOKEN = process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN;
@@ -88,6 +118,17 @@ async function ensurePgTables(): Promise<boolean> {
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
     `;
+    await sql`
+      CREATE TABLE IF NOT EXISTS translation_history (
+        id VARCHAR(255) PRIMARY KEY,
+        user_id VARCHAR(255),
+        user_email VARCHAR(255),
+        user_name VARCHAR(255),
+        is_guest BOOLEAN DEFAULT FALSE,
+        guest_identifier VARCHAR(255),
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `;
     pgInitAttempted = true;
     return true;
   } catch (err) {
@@ -100,6 +141,7 @@ async function ensurePgTables(): Promise<boolean> {
 let memoryUsers: Record<string, any> = {};
 let memorySessions: Record<string, any> = {};
 let memoryPromptHistory: Array<any> = [];
+let memoryTranslationHistory: Array<any> = [];
 
 async function loadFallbackData() {
   try {
@@ -113,6 +155,10 @@ async function loadFallbackData() {
   try {
     const hData = await fs.promises.readFile(TMP_PROMPT_HISTORY_PATH, "utf-8");
     memoryPromptHistory = JSON.parse(hData);
+  } catch {}
+  try {
+    const tData = await fs.promises.readFile(TMP_TRANSLATION_HISTORY_PATH, "utf-8");
+    memoryTranslationHistory = JSON.parse(tData);
   } catch {}
 }
 loadFallbackData();
@@ -130,6 +176,11 @@ async function saveFallbackSessions() {
 async function saveFallbackPromptHistory() {
   try {
     await fs.promises.writeFile(TMP_PROMPT_HISTORY_PATH, JSON.stringify(memoryPromptHistory, null, 2));
+  } catch {}
+}
+async function saveFallbackTranslationHistory() {
+  try {
+    await fs.promises.writeFile(TMP_TRANSLATION_HISTORY_PATH, JSON.stringify(memoryTranslationHistory, null, 2));
   } catch {}
 }
 
@@ -357,6 +408,158 @@ async function getPromptHistory(): Promise<any[]> {
     }
   }
   return memoryPromptHistory;
+}
+
+async function deletePromptHistoryItem(id: string): Promise<boolean> {
+  if (isPostgresConfigured()) {
+    try {
+      await ensurePgTables();
+      await sql`DELETE FROM prompt_history WHERE id = ${id}`;
+    } catch (err) {
+      console.error("Error deleting prompt history item in Postgres:", err);
+    }
+  }
+
+  memoryPromptHistory = memoryPromptHistory.filter((item) => item.id !== id);
+  await saveFallbackPromptHistory();
+  return true;
+}
+
+async function recordTranslation(item: {
+  userId?: string;
+  userEmail?: string;
+  userName?: string;
+  isGuest: boolean;
+  guestIdentifier?: string;
+}): Promise<void> {
+  const id = "tr_" + crypto.randomUUID().replace(/-/g, "").slice(0, 16);
+  const now = new Date().toISOString();
+
+  if (isPostgresConfigured()) {
+    try {
+      await ensurePgTables();
+      await sql`
+        INSERT INTO translation_history (id, user_id, user_email, user_name, is_guest, guest_identifier, created_at)
+        VALUES (${id}, ${item.userId || null}, ${item.userEmail || null}, ${item.userName || null}, ${item.isGuest}, ${item.guestIdentifier || null}, NOW());
+      `;
+    } catch (err) {
+      console.error("Error recording translation in Postgres:", err);
+    }
+  }
+
+  memoryTranslationHistory.unshift({
+    id,
+    user_id: item.userId || null,
+    user_email: item.userEmail || null,
+    user_name: item.userName || null,
+    is_guest: item.isGuest,
+    guest_identifier: item.guestIdentifier || null,
+    created_at: now,
+  });
+  await saveFallbackTranslationHistory();
+}
+
+async function getNextGuestIdentifier(): Promise<string> {
+  let records: any[] = [];
+  if (isPostgresConfigured()) {
+    try {
+      await ensurePgTables();
+      const { rows } = await sql`
+        SELECT DISTINCT guest_identifier FROM translation_history WHERE is_guest = TRUE AND guest_identifier IS NOT NULL;
+      `;
+      if (rows) records = rows;
+    } catch (err) {
+      records = memoryTranslationHistory;
+    }
+  } else {
+    records = memoryTranslationHistory;
+  }
+
+  let maxNum = 0;
+  for (const r of records) {
+    const gid = r.guest_identifier || r.guestIdentifier;
+    if (gid && typeof gid === "string") {
+      const match = gid.match(/^guest-(\d+)$/i);
+      if (match) {
+        const num = parseInt(match[1], 10);
+        if (!isNaN(num) && num > maxNum) {
+          maxNum = num;
+        }
+      }
+    }
+  }
+  return `guest-${maxNum + 1}`;
+}
+
+async function getTranslationStats(): Promise<{
+  users: Array<{ user_id: string; email: string; name: string; count: number; last_translated: string }>;
+  guests: Array<{ guest_id: string; count: number; last_translated: string }>;
+  total: number;
+}> {
+  let records: any[] = [];
+  if (isPostgresConfigured()) {
+    try {
+      await ensurePgTables();
+      const { rows } = await sql`
+        SELECT * FROM translation_history ORDER BY created_at DESC;
+      `;
+      if (rows) records = rows;
+    } catch (err) {
+      records = memoryTranslationHistory;
+    }
+  } else {
+    records = memoryTranslationHistory;
+  }
+
+  const userCountsMap: Record<string, { user_id: string; email: string; name: string; count: number; last_translated: string }> = {};
+  const guestCountsMap: Record<string, { guest_id: string; count: number; last_translated: string }> = {};
+
+  for (const r of records) {
+    const isGuest = Boolean(r.is_guest || r.isGuest);
+    const createdAt = r.created_at || r.createdAt || new Date().toISOString();
+
+    if (isGuest) {
+      const gid = r.guest_identifier || r.guestIdentifier || "guest-1";
+      if (!guestCountsMap[gid]) {
+        guestCountsMap[gid] = { guest_id: gid, count: 0, last_translated: createdAt };
+      }
+      guestCountsMap[gid].count += 1;
+      if (new Date(createdAt) > new Date(guestCountsMap[gid].last_translated)) {
+        guestCountsMap[gid].last_translated = createdAt;
+      }
+    } else {
+      const uid = r.user_id || r.userId;
+      if (uid) {
+        if (!userCountsMap[uid]) {
+          userCountsMap[uid] = {
+            user_id: uid,
+            email: r.user_email || r.userEmail || "",
+            name: r.user_name || r.userName || "User",
+            count: 0,
+            last_translated: createdAt,
+          };
+        }
+        userCountsMap[uid].count += 1;
+        if (new Date(createdAt) > new Date(userCountsMap[uid].last_translated)) {
+          userCountsMap[uid].last_translated = createdAt;
+        }
+      }
+    }
+  }
+
+  const guests = Object.values(guestCountsMap).sort((a, b) => {
+    const numA = parseInt(a.guest_id.replace(/\D/g, ""), 10) || 0;
+    const numB = parseInt(b.guest_id.replace(/\D/g, ""), 10) || 0;
+    return numA - numB;
+  });
+
+  const users = Object.values(userCountsMap).sort((a, b) => b.count - a.count);
+
+  return {
+    users,
+    guests,
+    total: records.length,
+  };
 }
 
 function extractBearerToken(req: Request): string | null {
@@ -640,33 +843,33 @@ function extractJson(rawText: string): any {
   return JSON.parse(text);
 }
 
-function buildReplacements(resdict: any, qtype: string): Record<string, string> {
+function buildReplacements(resdict: any, qtype: string): Record<string, string | TextSegment[]> {
   if (qtype === "normal") {
     return {
       "Question English": resdict["QEng"] || "",
-      "Question Sinhala": ConvertToLegacy(resdict["QSin"] || ""),
+      "Question Sinhala": toLegacySegments(resdict["QSin"] || ""),
 
       "Answer 1 English": resdict["AnswersEng"]?.[0] || "",
       "Answer 2 English": resdict["AnswersEng"]?.[1] || "",
       "Answer 3 English": resdict["AnswersEng"]?.[2] || "",
       "Answer 4 English": resdict["AnswersEng"]?.[3] || "",
       "Answer 5 English": resdict["AnswersEng"]?.[4] || "",
-      "Answer 1 Sinhala": ConvertToLegacy(resdict["AnswersSin"]?.[0] || ""),
-      "Answer 2 Sinhala": ConvertToLegacy(resdict["AnswersSin"]?.[1] || ""),
-      "Answer 3 Sinhala": ConvertToLegacy(resdict["AnswersSin"]?.[2] || ""),
-      "Answer 4 Sinhala": ConvertToLegacy(resdict["AnswersSin"]?.[3] || ""),
-      "Answer 5 Sinhala": ConvertToLegacy(resdict["AnswersSin"]?.[4] || ""),
+      "Answer 1 Sinhala": toLegacySegments(resdict["AnswersSin"]?.[0] || ""),
+      "Answer 2 Sinhala": toLegacySegments(resdict["AnswersSin"]?.[1] || ""),
+      "Answer 3 Sinhala": toLegacySegments(resdict["AnswersSin"]?.[2] || ""),
+      "Answer 4 Sinhala": toLegacySegments(resdict["AnswersSin"]?.[3] || ""),
+      "Answer 5 Sinhala": toLegacySegments(resdict["AnswersSin"]?.[4] || ""),
 
       "Explanation 1 English": resdict["ExplEng"]?.[0] || "",
       "Explanation 2 English": resdict["ExplEng"]?.[1] || "",
       "Explanation 3 English": resdict["ExplEng"]?.[2] || "",
       "Explanation 4 English": resdict["ExplEng"]?.[3] || "",
       "Explanation 5 English": resdict["ExplEng"]?.[4] || "",
-      "Explanation 1 Sinhala": ConvertToLegacy(resdict["ExplSin"]?.[0] || ""),
-      "Explanation 2 Sinhala": ConvertToLegacy(resdict["ExplSin"]?.[1] || ""),
-      "Explanation 3 Sinhala": ConvertToLegacy(resdict["ExplSin"]?.[2] || ""),
-      "Explanation 4 Sinhala": ConvertToLegacy(resdict["ExplSin"]?.[3] || ""),
-      "Explanation 5 Sinhala": ConvertToLegacy(resdict["ExplSin"]?.[4] || ""),
+      "Explanation 1 Sinhala": toLegacySegments(resdict["ExplSin"]?.[0] || ""),
+      "Explanation 2 Sinhala": toLegacySegments(resdict["ExplSin"]?.[1] || ""),
+      "Explanation 3 Sinhala": toLegacySegments(resdict["ExplSin"]?.[2] || ""),
+      "Explanation 4 Sinhala": toLegacySegments(resdict["ExplSin"]?.[3] || ""),
+      "Explanation 5 Sinhala": toLegacySegments(resdict["ExplSin"]?.[4] || ""),
 
       "QNum": String(resdict["AnsNo"] ?? ""),
     };
@@ -675,32 +878,32 @@ function buildReplacements(resdict: any, qtype: string): Record<string, string> 
   if (qtype === "statement") {
     return {
       "Question English": resdict["QEng"] || "",
-      "Question Sinhala": ConvertToLegacy(resdict["QSin"] || ""),
+      "Question Sinhala": toLegacySegments(resdict["QSin"] || ""),
 
       "StateAEng": resdict["StatementsEng"]?.[0] || "",
       "StateBEng": resdict["StatementsEng"]?.[1] || "",
       "StateCEng": resdict["StatementsEng"]?.[2] || "",
-      "StateASin": ConvertToLegacy(resdict["StatementsSin"]?.[0] || ""),
-      "StateBSin": ConvertToLegacy(resdict["StatementsSin"]?.[1] || ""),
-      "StateCSin": ConvertToLegacy(resdict["StatementsSin"]?.[2] || ""),
+      "StateASin": toLegacySegments(resdict["StatementsSin"]?.[0] || ""),
+      "StateBSin": toLegacySegments(resdict["StatementsSin"]?.[1] || ""),
+      "StateCSin": toLegacySegments(resdict["StatementsSin"]?.[2] || ""),
 
       "Answer 1 English": resdict["AnswersEng"]?.[0] || "",
       "Answer 2 English": resdict["AnswersEng"]?.[1] || "",
       "Answer 3 English": resdict["AnswersEng"]?.[2] || "",
       "Answer 4 English": resdict["AnswersEng"]?.[3] || "",
       "Answer 5 English": resdict["AnswersEng"]?.[4] || "",
-      "Answer 1 Sinhala": ConvertToLegacy(resdict["AnswersSin"]?.[0] || ""),
-      "Answer 2 Sinhala": ConvertToLegacy(resdict["AnswersSin"]?.[1] || ""),
-      "Answer 3 Sinhala": ConvertToLegacy(resdict["AnswersSin"]?.[2] || ""),
-      "Answer 4 Sinhala": ConvertToLegacy(resdict["AnswersSin"]?.[3] || ""),
-      "Answer 5 Sinhala": ConvertToLegacy(resdict["AnswersSin"]?.[4] || ""),
+      "Answer 1 Sinhala": toLegacySegments(resdict["AnswersSin"]?.[0] || ""),
+      "Answer 2 Sinhala": toLegacySegments(resdict["AnswersSin"]?.[1] || ""),
+      "Answer 3 Sinhala": toLegacySegments(resdict["AnswersSin"]?.[2] || ""),
+      "Answer 4 Sinhala": toLegacySegments(resdict["AnswersSin"]?.[3] || ""),
+      "Answer 5 Sinhala": toLegacySegments(resdict["AnswersSin"]?.[4] || ""),
 
       "ExplAEng": resdict["ExplEng"]?.[0] || "",
       "ExplBEng": resdict["ExplEng"]?.[1] || "",
       "ExplCEng": resdict["ExplEng"]?.[2] || "",
-      "ExplASin": ConvertToLegacy(resdict["ExplSin"]?.[0] || ""),
-      "ExplBSin": ConvertToLegacy(resdict["ExplSin"]?.[1] || ""),
-      "ExplCSin": ConvertToLegacy(resdict["ExplSin"]?.[2] || ""),
+      "ExplASin": toLegacySegments(resdict["ExplSin"]?.[0] || ""),
+      "ExplBSin": toLegacySegments(resdict["ExplSin"]?.[1] || ""),
+      "ExplCSin": toLegacySegments(resdict["ExplSin"]?.[2] || ""),
 
       "QNum": String(resdict["AnsNo"] ?? ""),
     };
@@ -709,7 +912,7 @@ function buildReplacements(resdict: any, qtype: string): Record<string, string> 
   if (qtype === "code") {
     return {
       "Question English": resdict["QEng"] || "",
-      "Question Sinhala": ConvertToLegacy(resdict["QSin"] || ""),
+      "Question Sinhala": toLegacySegments(resdict["QSin"] || ""),
 
       "codelines": resdict["Code"] || "",
 
@@ -718,14 +921,14 @@ function buildReplacements(resdict: any, qtype: string): Record<string, string> 
       "Answer 3 English": resdict["AnswersEng"]?.[2] || "",
       "Answer 4 English": resdict["AnswersEng"]?.[3] || "",
       "Answer 5 English": resdict["AnswersEng"]?.[4] || "",
-      "Answer 1 Sinhala": ConvertToLegacy(resdict["AnswersSin"]?.[0] || ""),
-      "Answer 2 Sinhala": ConvertToLegacy(resdict["AnswersSin"]?.[1] || ""),
-      "Answer 3 Sinhala": ConvertToLegacy(resdict["AnswersSin"]?.[2] || ""),
-      "Answer 4 Sinhala": ConvertToLegacy(resdict["AnswersSin"]?.[3] || ""),
-      "Answer 5 Sinhala": ConvertToLegacy(resdict["AnswersSin"]?.[4] || ""),
+      "Answer 1 Sinhala": toLegacySegments(resdict["AnswersSin"]?.[0] || ""),
+      "Answer 2 Sinhala": toLegacySegments(resdict["AnswersSin"]?.[1] || ""),
+      "Answer 3 Sinhala": toLegacySegments(resdict["AnswersSin"]?.[2] || ""),
+      "Answer 4 Sinhala": toLegacySegments(resdict["AnswersSin"]?.[3] || ""),
+      "Answer 5 Sinhala": toLegacySegments(resdict["AnswersSin"]?.[4] || ""),
 
       "ExplanationEnglish": resdict["ExplEng"] || "",
-      "ExplanationSinhala": ConvertToLegacy(resdict["ExplSin"] || ""),
+      "ExplanationSinhala": toLegacySegments(resdict["ExplSin"] || ""),
 
       "QNum": String(resdict["AnsNo"] ?? ""),
     };
@@ -734,9 +937,46 @@ function buildReplacements(resdict: any, qtype: string): Record<string, string> 
   throw new Error(`Unknown question type: ${qtype}`);
 }
 
+const WORD_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+
+// Builds a single <w:r> run for one text segment, cloning the placeholder's
+// original formatting and overriding just the font for English segments so
+// they render in Times New Roman instead of the legacy Sinhala font.
+// Newlines in `text` become real <w:br/> elements (Word ignores literal "\n"
+// characters inside <w:t>, it doesn't turn them into line breaks).
+function buildRun(
+  doc: Document,
+  templateRPr: Element | null,
+  text: string,
+  isEnglish: boolean
+): Element {
+  const run = doc.createElementNS(WORD_NS, "w:r");
+  if (templateRPr) {
+    const rPrClone = templateRPr.cloneNode(true) as Element;
+    if (isEnglish) {
+      const rFonts = rPrClone.getElementsByTagName("w:rFonts").item(0);
+      if (rFonts) {
+        rFonts.setAttribute("w:ascii", "Times New Roman");
+        rFonts.setAttribute("w:hAnsi", "Times New Roman");
+      }
+    }
+    run.appendChild(rPrClone);
+  }
+  text.split("\n").forEach((line, idx) => {
+    if (idx > 0) run.appendChild(doc.createElementNS(WORD_NS, "w:br"));
+    const t = doc.createElementNS(WORD_NS, "w:t");
+    if (line.startsWith(" ") || line.endsWith(" ")) {
+      t.setAttribute("xml:space", "preserve");
+    }
+    t.textContent = line;
+    run.appendChild(t);
+  });
+  return run;
+}
+
 async function findAndReplaceInDocx(
   templatePath: string,
-  replacements: Record<string, string>
+  replacements: Record<string, string | TextSegment[]>
 ): Promise<Buffer> {
   const content = await fs.promises.readFile(templatePath);
   const zip = await JSZip.loadAsync(content);
@@ -760,13 +1000,21 @@ async function findAndReplaceInDocx(
       const p = paragraphs.item(i);
       if (!p) continue;
 
-      const tElements = p.getElementsByTagName("w:t");
-      if (!tElements || tElements.length === 0) continue;
+      const tElementsLive = p.getElementsByTagName("w:t");
+      if (!tElementsLive || tElementsLive.length === 0) continue;
+
+      // getElementsByTagName() returns a LIVE list. We insert/remove <w:t>
+      // nodes below, so we snapshot to a plain array up front - otherwise
+      // the cleanup loop further down re-reads the now-mutated live list
+      // and wipes out the very lines/segments we just inserted (this was
+      // the root cause of "only the first line of code shows up").
+      const tElements: Element[] = [];
+      for (let j = 0; j < tElementsLive.length; j++) {
+        tElements.push(tElementsLive.item(j)!);
+      }
 
       let pText = "";
-      for (let j = 0; j < tElements.length; j++) {
-        pText += tElements.item(j)?.textContent || "";
-      }
+      for (const t of tElements) pText += t.textContent || "";
 
       let hasMatch = false;
       for (const oldKey of Object.keys(replacements)) {
@@ -775,54 +1023,78 @@ async function findAndReplaceInDocx(
           break;
         }
       }
+      if (!hasMatch) continue;
 
-      if (hasMatch) {
-        for (const [oldKey, newKey] of Object.entries(replacements)) {
-          pText = pText.replaceAll(oldKey, newKey);
+      // Plain string replacements first (a paragraph may contain more than
+      // one placeholder).
+      for (const [oldKey, newVal] of Object.entries(replacements)) {
+        if (typeof newVal === "string") {
+          pText = pText.split(oldKey).join(newVal);
         }
-
-        const firstT = tElements.item(0);
-        if (firstT) {
-          if (pText.includes("\n")) {
-            const parent = firstT.parentNode;
-            if (parent) {
-              const lines = pText.split("\n");
-              for (let l = 0; l < lines.length; l++) {
-                if (l > 0) {
-                  const br = doc.createElementNS(
-                    "http://schemas.openxmlformats.org/wordprocessingml/2006/main",
-                    "w:br"
-                  );
-                  parent.insertBefore(br, firstT);
-                }
-                const tNode = doc.createElementNS(
-                  "http://schemas.openxmlformats.org/wordprocessingml/2006/main",
-                  "w:t"
-                );
-                if (lines[l].startsWith(" ") || lines[l].endsWith(" ")) {
-                  tNode.setAttribute("xml:space", "preserve");
-                }
-                tNode.textContent = lines[l];
-                parent.insertBefore(tNode, firstT);
-              }
-              parent.removeChild(firstT);
-            }
-          } else {
-            if (pText.startsWith(" ") || pText.endsWith(" ")) {
-              firstT.setAttribute("xml:space", "preserve");
-            }
-            firstT.textContent = pText;
-          }
-        }
-
-        for (let j = 1; j < tElements.length; j++) {
-          const t = tElements.item(j);
-          if (t) {
-            t.textContent = "";
-          }
-        }
-        modified = true;
       }
+
+      // Then look for a segmented (mixed Sinhala/English font) replacement.
+      // Templates only ever put one such placeholder per paragraph.
+      let segmentKey: string | null = null;
+      let segments: TextSegment[] | null = null;
+      for (const [oldKey, newVal] of Object.entries(replacements)) {
+        if (Array.isArray(newVal) && pText.includes(oldKey)) {
+          segmentKey = oldKey;
+          segments = newVal;
+          break;
+        }
+      }
+
+      const firstT = tElements[0];
+      const firstRun = firstT.parentNode as Element;
+
+      if (segments && segmentKey) {
+        const paragraphEl = firstRun.parentNode as Element;
+        const templateRPr = firstRun.getElementsByTagName("w:rPr").item(0) ?? null;
+
+        const idx = pText.indexOf(segmentKey);
+        const before = pText.slice(0, idx);
+        const after = pText.slice(idx + segmentKey.length);
+
+        const newRuns: Element[] = [];
+        if (before) newRuns.push(buildRun(doc, templateRPr, before, false));
+        for (const seg of segments) {
+          newRuns.push(buildRun(doc, templateRPr, seg.text, seg.isEnglish));
+        }
+        if (after) newRuns.push(buildRun(doc, templateRPr, after, false));
+
+        for (const r of newRuns) paragraphEl.insertBefore(r, firstRun);
+        paragraphEl.removeChild(firstRun);
+      } else if (pText.includes("\n")) {
+        const parent = firstT.parentNode;
+        if (parent) {
+          const lines = pText.split("\n");
+          for (let l = 0; l < lines.length; l++) {
+            if (l > 0) {
+              parent.insertBefore(doc.createElementNS(WORD_NS, "w:br"), firstT);
+            }
+            const tNode = doc.createElementNS(WORD_NS, "w:t");
+            if (lines[l].startsWith(" ") || lines[l].endsWith(" ")) {
+              tNode.setAttribute("xml:space", "preserve");
+            }
+            tNode.textContent = lines[l];
+            parent.insertBefore(tNode, firstT);
+          }
+          parent.removeChild(firstT);
+        }
+      } else {
+        if (pText.startsWith(" ") || pText.endsWith(" ")) {
+          firstT.setAttribute("xml:space", "preserve");
+        }
+        firstT.textContent = pText;
+      }
+
+      // Clear any leftover original <w:t> nodes (e.g. Word had split the
+      // placeholder across multiple runs) - uses the snapshot, not a live list.
+      for (let j = 1; j < tElements.length; j++) {
+        tElements[j].textContent = "";
+      }
+      modified = true;
     }
 
     if (modified) {
@@ -871,16 +1143,112 @@ app.get("/api/auth/me", async (req: Request, res: Response) => {
 });
 
 function getRedirectUri(req: Request): string {
+  let uri = "";
   if (req.query && typeof req.query.redirect_uri === "string" && req.query.redirect_uri) {
-    return req.query.redirect_uri;
+    uri = req.query.redirect_uri;
+  } else {
+    const host = req.get("host") || "localhost:3000";
+    const protocol = (req.headers["x-forwarded-proto"] as string) || req.protocol || "http";
+    const isCloudRun = host.includes(".run.app");
+    const effProtocol = isCloudRun ? "https" : protocol;
+    const appUrl = process.env.APP_URL || `${effProtocol}://${host}`;
+    uri = `${appUrl.replace(/\/$/, "")}/api/auth/google/callback`;
   }
-  const host = req.get("host") || "localhost:3000";
-  const protocol = (req.headers["x-forwarded-proto"] as string) || req.protocol || "http";
-  const isCloudRun = host.includes(".run.app");
-  const effProtocol = isCloudRun ? "https" : protocol;
-  const appUrl = process.env.APP_URL || `${effProtocol}://${host}`;
-  return `${appUrl.replace(/\/$/, "")}/api/auth/google/callback`;
+  // Standardize: strip any trailing slash or query params
+  try {
+    const u = new URL(uri);
+    return `${u.origin}${u.pathname.replace(/\/$/, "")}`;
+  } catch (_) {
+    return uri.replace(/\/$/, "");
+  }
 }
+
+// Get Google OAuth Client ID config for GIS
+app.get("/api/auth/google/config", (req: Request, res: Response) => {
+  return res.json({
+    clientId: process.env.GOOGLE_CLIENT_ID || "",
+    configured: Boolean(process.env.GOOGLE_CLIENT_ID),
+  });
+});
+
+// Google Credential / ID Token Authentication (Inline GIS flow)
+app.post(["/api/auth/google/credential", "/api/auth/google/token"], async (req: Request, res: Response) => {
+  try {
+    const { credential, accessToken } = req.body || {};
+    let email = "";
+    let name = "";
+    let picture = "";
+
+    if (credential) {
+      // Verify Google ID token via Google's tokeninfo endpoint
+      const tokenRes = await fetch(`https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(credential)}`);
+      if (!tokenRes.ok) {
+        const errText = await tokenRes.text();
+        return res.status(400).json({ error: `Invalid Google credential token: ${errText}` });
+      }
+      const tokenInfo = await tokenRes.json();
+      email = tokenInfo.email;
+      name = tokenInfo.name || email?.split("@")[0] || "User";
+      picture = tokenInfo.picture || "";
+    } else if (accessToken) {
+      const userRes = await fetch("https://www.googleapis.com/oauth2/v2/userinfo", {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+      if (!userRes.ok) {
+        return res.status(400).json({ error: "Failed to fetch Google profile with access token." });
+      }
+      const gUser = await userRes.json();
+      email = gUser.email;
+      name = gUser.name || email?.split("@")[0] || "User";
+      picture = gUser.picture || "";
+    } else {
+      return res.status(400).json({ error: "No Google credential or access token provided." });
+    }
+
+    if (!email) {
+      return res.status(400).json({ error: "Could not retrieve email from Google account." });
+    }
+
+    let role = "user";
+    if (email.toLowerCase() === "sachoice51@gmail.com") {
+      role = "admin";
+    }
+
+    let user = await findUserByEmail(email);
+    if (!user) {
+      user = await createUser({
+        email,
+        name,
+        role,
+        auth_provider: "google",
+      });
+    } else {
+      let updated = false;
+      if (user.role !== role && email.toLowerCase() === "sachoice51@gmail.com") {
+        user.role = role;
+        updated = true;
+      }
+      if (updated) {
+        await updateUser(user);
+      }
+    }
+
+    const token = await createSession(user.id);
+
+    res.cookie("session_token", token, {
+      httpOnly: true,
+      secure: true,
+      sameSite: "none",
+      maxAge: 30 * 24 * 60 * 60 * 1000,
+    });
+
+    const userWithToken = { ...user, token };
+    return res.json({ success: true, user: userWithToken, token });
+  } catch (err: any) {
+    console.error("Error in Google credential auth:", err);
+    return res.status(500).json({ error: err.message || "Authentication failed." });
+  }
+});
 
 // Get Google OAuth Authorization URL
 app.get(["/api/auth/google", "/api/auth/google/url"], (req: Request, res: Response) => {
@@ -1005,17 +1373,48 @@ app.get(["/api/auth/google/callback", "/api/auth/google/callback/"], async (req:
     });
 
     return res.send(`
+      <!DOCTYPE html>
       <html>
-        <body>
+        <head>
+          <meta charset="utf-8">
+          <title>Authentication Complete</title>
+        </head>
+        <body style="font-family: system-ui, -apple-system, sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; background-color: #f8fafc; color: #0f172a;">
+          <div style="text-align: center; padding: 32px; background: white; border-radius: 12px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); max-width: 400px; width: 90%;">
+            <div style="font-size: 40px; margin-bottom: 12px;">✅</div>
+            <h2 style="margin: 0 0 8px 0; font-size: 20px; font-weight: 600;">Sign In Successful!</h2>
+            <p style="margin: 0; color: #64748b; font-size: 14px; line-height: 1.5;">You have successfully signed in. This window will close automatically.</p>
+          </div>
           <script>
-            if (window.opener) {
-              window.opener.postMessage({ type: 'OAUTH_AUTH_SUCCESS', user: ${safeUserJson} }, '*');
-              window.close();
-            } else {
-              window.location.href = '/';
-            }
+            const userData = ${safeUserJson};
+            // 1) Store session token & event in localStorage for main window
+            try {
+              if (userData && userData.token) {
+                localStorage.setItem("auth_session_token", userData.token);
+              }
+              localStorage.setItem("oauth_auth_success", JSON.stringify({ user: userData, timestamp: Date.now() }));
+            } catch (e) {}
+
+            // 2) Send postMessage to opener or parent if accessible
+            try {
+              if (window.opener) {
+                window.opener.postMessage({ type: 'OAUTH_AUTH_SUCCESS', user: userData }, '*');
+              }
+            } catch (e) {}
+
+            // 3) Broadcast via BroadcastChannel
+            try {
+              if (typeof BroadcastChannel !== 'undefined') {
+                const bc = new BroadcastChannel('oauth_channel');
+                bc.postMessage({ type: 'OAUTH_AUTH_SUCCESS', user: userData });
+              }
+            } catch (e) {}
+
+            // 4) Close popup
+            setTimeout(() => {
+              try { window.close(); } catch (e) {}
+            }, 500);
           </script>
-          <p>Sign in successful. Redirecting...</p>
         </body>
       </html>
     `);
@@ -1265,6 +1664,60 @@ app.delete("/api/admin/delete", async (req: Request, res: Response) => {
 });
 
 
+// Admin: Delete prompt history item
+app.delete(["/api/admin/prompts/:id", "/api/admin/prompts/delete/:id"], async (req: Request, res: Response) => {
+  try {
+    const user = await getCurrentUser(req);
+    if (!isUserAdminAccount(user, req)) {
+      return res.status(403).json({ error: "Admin authentication required." });
+    }
+
+    const promptId = req.params.id || req.body?.id;
+    if (!promptId) {
+      return res.status(400).json({ error: "Prompt ID is required." });
+    }
+
+    await deletePromptHistoryItem(promptId);
+    return res.json({ success: true, message: "Question generation record deleted successfully." });
+  } catch (err: any) {
+    return res.status(500).json({ error: "Failed to delete question generation record." });
+  }
+});
+
+app.post("/api/admin/prompts/delete", async (req: Request, res: Response) => {
+  try {
+    const user = await getCurrentUser(req);
+    if (!isUserAdminAccount(user, req)) {
+      return res.status(403).json({ error: "Admin authentication required." });
+    }
+
+    const { id } = req.body || {};
+    if (!id) {
+      return res.status(400).json({ error: "Prompt ID is required." });
+    }
+
+    await deletePromptHistoryItem(id);
+    return res.json({ success: true, message: "Question generation record deleted successfully." });
+  } catch (err: any) {
+    return res.status(500).json({ error: "Failed to delete question generation record." });
+  }
+});
+
+// Admin: Get translation feature usage stats
+app.get("/api/admin/translations", async (req: Request, res: Response) => {
+  try {
+    const user = await getCurrentUser(req);
+    if (!isUserAdminAccount(user, req)) {
+      return res.status(403).json({ error: "Admin authentication required." });
+    }
+
+    const stats = await getTranslationStats();
+    return res.json(stats);
+  } catch (err: any) {
+    return res.status(500).json({ error: "Failed to fetch translation usage stats." });
+  }
+});
+
 app.post("/api/translate", async (req: Request, res: Response) => {
   const payload = req.body || {};
   const text = (payload.text || "").trim();
@@ -1272,6 +1725,26 @@ app.post("/api/translate", async (req: Request, res: Response) => {
 
   if (!text) {
     return res.status(400).json({ error: "Please enter text to translate." });
+  }
+
+  // Identify user or guest
+  const user = await getCurrentUser(req);
+  let guestId: string | undefined = undefined;
+
+  if (!user) {
+    let existingGuestId = req.cookies?.guest_id || req.headers["x-guest-id"] || payload.guestId;
+    if (existingGuestId && typeof existingGuestId === "string" && /^guest-\d+$/i.test(existingGuestId.trim())) {
+      guestId = existingGuestId.trim().toLowerCase();
+    } else {
+      guestId = await getNextGuestIdentifier();
+    }
+    // Set guest_id cookie for persistence across unauthenticated sessions
+    res.cookie("guest_id", guestId, {
+      httpOnly: false,
+      secure: true,
+      sameSite: "none",
+      maxAge: 365 * 24 * 60 * 60 * 1000,
+    });
   }
 
   const apiKey = process.env.GEMINI_API_KEY_TRANSLATE;
@@ -1332,7 +1805,21 @@ ${text}`;
     });
     const unicodeTranslation = (response.text || "").trim();
     const legacyTranslation = ConvertToLegacy(unicodeTranslation);
-    return res.json({ translation: legacyTranslation, unicode: unicodeTranslation });
+
+    // Record translation usage stats
+    try {
+      await recordTranslation({
+        userId: user?.id,
+        userEmail: user?.email,
+        userName: user?.name,
+        isGuest: !user,
+        guestIdentifier: guestId,
+      });
+    } catch (err) {
+      console.error("Failed to record translation usage:", err);
+    }
+
+    return res.json({ translation: legacyTranslation, unicode: unicodeTranslation, guest_id: guestId });
   } catch (exc: any) {
     return res.status(502).json({ error: `The Gemini API request failed: ${exc?.message || exc}` });
   }

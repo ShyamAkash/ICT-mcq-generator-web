@@ -9,6 +9,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="static/style.css">
+<script src="https://accounts.google.com/gsi/client" async defer></script>
 </head>
 <body>
   <!-- Fixed Top-Left Site Navigation Menu -->
@@ -287,6 +288,7 @@
                     <th>Email</th>
                     <th>Auth Method</th>
                     <th>Role</th>
+                    <th>Translations</th>
                     <th>Registered Date</th>
                   </tr>
                 </thead>
@@ -296,7 +298,24 @@
               </table>
             </div>
 
-            <div class="section-heading" style="margin-top: 24px;">Question Generation Prompts (Separated By User & Type)</div>
+            <!-- Guest Translations Section -->
+            <div class="section-heading" style="margin-top: 24px;">Guest Translation Usage (Unauthenticated Users)</div>
+            <div class="admin-table-wrapper">
+              <table class="admin-table">
+                <thead>
+                  <tr>
+                    <th>Guest Identifier</th>
+                    <th>Translations Used</th>
+                    <th>Last Activity</th>
+                  </tr>
+                </thead>
+                <tbody id="admin-guests-list">
+                  <!-- Dynamically populated -->
+                </tbody>
+              </table>
+            </div>
+
+            <div class="section-heading" style="margin-top: 24px;">Question Generation Records (Separated By User & Type)</div>
             <div class="prompt-filter-bar">
               <input type="text" id="admin-prompt-search" placeholder="Search prompts or user email..." class="search-input">
               <select id="admin-type-filter" class="type-select">
@@ -380,8 +399,13 @@
       <h2 id="auth-modal-title" class="auth-title">Welcome to ictfromabc</h2>
       <p class="auth-subtitle">New users register with Google. Existing accounts sign in below.</p>
 
-      <!-- Google Sign In Button -->
-      <button type="button" id="google-signin-btn" class="google-auth-btn">
+      <!-- Google Identity Services Inline Rendered Button -->
+      <div id="g_id_signin_wrapper" style="display: flex; justify-content: center; align-items: center; min-height: 44px; margin-bottom: 12px; width: 100%;">
+        <div id="g_id_signin"></div>
+      </div>
+
+      <!-- Fallback Google Sign In Button -->
+      <button type="button" id="google-signin-btn" class="google-auth-btn" style="display: none;">
         <svg class="google-icon" width="18" height="18" viewBox="0 0 18 18">
           <path fill="#4285F4" d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844a4.14 4.14 0 0 1-1.796 2.716v2.259h2.908c1.702-1.567 2.684-3.875 2.684-6.616z"/>
           <path fill="#34A853" d="M9 18c2.43 0 4.467-.806 5.956-2.18l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18z"/>
@@ -390,6 +414,10 @@
         </svg>
         <span>Continue with Google</span>
       </button>
+
+      <p id="auth-status" class="status" role="status" aria-live="polite" style="margin-top: 12px;"></p>
+    </div>
+  </div>
 
   <script src="static/script.js"></script>
 </body>
