@@ -28,6 +28,7 @@ const TMP_PENDING_VOCAB_PATH = path.join("/tmp", "pending_vocab.json");
 const TMP_USERS_PATH = path.join("/tmp", "users.json");
 const TMP_SESSIONS_PATH = path.join("/tmp", "sessions.json");
 const TMP_PROMPT_HISTORY_PATH = path.join("/tmp", "prompt_history.json");
+const TMP_TRANSLATION_HISTORY_PATH = path.join("/tmp", "translation_history.json");
 
 const KV_URL = process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL;
 const KV_TOKEN = process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN;
@@ -88,6 +89,17 @@ async function ensurePgTables(): Promise<boolean> {
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
     `;
+    await sql`
+      CREATE TABLE IF NOT EXISTS translation_history (
+        id VARCHAR(255) PRIMARY KEY,
+        user_id VARCHAR(255),
+        user_email VARCHAR(255),
+        user_name VARCHAR(255),
+        is_guest BOOLEAN DEFAULT FALSE,
+        guest_identifier VARCHAR(255),
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `;
     pgInitAttempted = true;
     return true;
   } catch (err) {
@@ -100,6 +112,7 @@ async function ensurePgTables(): Promise<boolean> {
 let memoryUsers: Record<string, any> = {};
 let memorySessions: Record<string, any> = {};
 let memoryPromptHistory: Array<any> = [];
+let memoryTranslationHistory: Array<any> = [];
 
 async function loadFallbackData() {
   try {
@@ -113,6 +126,10 @@ async function loadFallbackData() {
   try {
     const hData = await fs.promises.readFile(TMP_PROMPT_HISTORY_PATH, "utf-8");
     memoryPromptHistory = JSON.parse(hData);
+  } catch {}
+  try {
+    const tData = await fs.promises.readFile(TMP_TRANSLATION_HISTORY_PATH, "utf-8");
+    memoryTranslationHistory = JSON.parse(tData);
   } catch {}
 }
 loadFallbackData();
@@ -130,6 +147,11 @@ async function saveFallbackSessions() {
 async function saveFallbackPromptHistory() {
   try {
     await fs.promises.writeFile(TMP_PROMPT_HISTORY_PATH, JSON.stringify(memoryPromptHistory, null, 2));
+  } catch {}
+}
+async function saveFallbackTranslationHistory() {
+  try {
+    await fs.promises.writeFile(TMP_TRANSLATION_HISTORY_PATH, JSON.stringify(memoryTranslationHistory, null, 2));
   } catch {}
 }
 
@@ -357,6 +379,158 @@ async function getPromptHistory(): Promise<any[]> {
     }
   }
   return memoryPromptHistory;
+}
+
+async function deletePromptHistoryItem(id: string): Promise<boolean> {
+  if (isPostgresConfigured()) {
+    try {
+      await ensurePgTables();
+      await sql`DELETE FROM prompt_history WHERE id = ${id}`;
+    } catch (err) {
+      console.error("Error deleting prompt history item in Postgres:", err);
+    }
+  }
+
+  memoryPromptHistory = memoryPromptHistory.filter((item) => item.id !== id);
+  await saveFallbackPromptHistory();
+  return true;
+}
+
+async function recordTranslation(item: {
+  userId?: string;
+  userEmail?: string;
+  userName?: string;
+  isGuest: boolean;
+  guestIdentifier?: string;
+}): Promise<void> {
+  const id = "tr_" + crypto.randomUUID().replace(/-/g, "").slice(0, 16);
+  const now = new Date().toISOString();
+
+  if (isPostgresConfigured()) {
+    try {
+      await ensurePgTables();
+      await sql`
+        INSERT INTO translation_history (id, user_id, user_email, user_name, is_guest, guest_identifier, created_at)
+        VALUES (${id}, ${item.userId || null}, ${item.userEmail || null}, ${item.userName || null}, ${item.isGuest}, ${item.guestIdentifier || null}, NOW());
+      `;
+    } catch (err) {
+      console.error("Error recording translation in Postgres:", err);
+    }
+  }
+
+  memoryTranslationHistory.unshift({
+    id,
+    user_id: item.userId || null,
+    user_email: item.userEmail || null,
+    user_name: item.userName || null,
+    is_guest: item.isGuest,
+    guest_identifier: item.guestIdentifier || null,
+    created_at: now,
+  });
+  await saveFallbackTranslationHistory();
+}
+
+async function getNextGuestIdentifier(): Promise<string> {
+  let records: any[] = [];
+  if (isPostgresConfigured()) {
+    try {
+      await ensurePgTables();
+      const { rows } = await sql`
+        SELECT DISTINCT guest_identifier FROM translation_history WHERE is_guest = TRUE AND guest_identifier IS NOT NULL;
+      `;
+      if (rows) records = rows;
+    } catch (err) {
+      records = memoryTranslationHistory;
+    }
+  } else {
+    records = memoryTranslationHistory;
+  }
+
+  let maxNum = 0;
+  for (const r of records) {
+    const gid = r.guest_identifier || r.guestIdentifier;
+    if (gid && typeof gid === "string") {
+      const match = gid.match(/^guest-(\d+)$/i);
+      if (match) {
+        const num = parseInt(match[1], 10);
+        if (!isNaN(num) && num > maxNum) {
+          maxNum = num;
+        }
+      }
+    }
+  }
+  return `guest-${maxNum + 1}`;
+}
+
+async function getTranslationStats(): Promise<{
+  users: Array<{ user_id: string; email: string; name: string; count: number; last_translated: string }>;
+  guests: Array<{ guest_id: string; count: number; last_translated: string }>;
+  total: number;
+}> {
+  let records: any[] = [];
+  if (isPostgresConfigured()) {
+    try {
+      await ensurePgTables();
+      const { rows } = await sql`
+        SELECT * FROM translation_history ORDER BY created_at DESC;
+      `;
+      if (rows) records = rows;
+    } catch (err) {
+      records = memoryTranslationHistory;
+    }
+  } else {
+    records = memoryTranslationHistory;
+  }
+
+  const userCountsMap: Record<string, { user_id: string; email: string; name: string; count: number; last_translated: string }> = {};
+  const guestCountsMap: Record<string, { guest_id: string; count: number; last_translated: string }> = {};
+
+  for (const r of records) {
+    const isGuest = Boolean(r.is_guest || r.isGuest);
+    const createdAt = r.created_at || r.createdAt || new Date().toISOString();
+
+    if (isGuest) {
+      const gid = r.guest_identifier || r.guestIdentifier || "guest-1";
+      if (!guestCountsMap[gid]) {
+        guestCountsMap[gid] = { guest_id: gid, count: 0, last_translated: createdAt };
+      }
+      guestCountsMap[gid].count += 1;
+      if (new Date(createdAt) > new Date(guestCountsMap[gid].last_translated)) {
+        guestCountsMap[gid].last_translated = createdAt;
+      }
+    } else {
+      const uid = r.user_id || r.userId;
+      if (uid) {
+        if (!userCountsMap[uid]) {
+          userCountsMap[uid] = {
+            user_id: uid,
+            email: r.user_email || r.userEmail || "",
+            name: r.user_name || r.userName || "User",
+            count: 0,
+            last_translated: createdAt,
+          };
+        }
+        userCountsMap[uid].count += 1;
+        if (new Date(createdAt) > new Date(userCountsMap[uid].last_translated)) {
+          userCountsMap[uid].last_translated = createdAt;
+        }
+      }
+    }
+  }
+
+  const guests = Object.values(guestCountsMap).sort((a, b) => {
+    const numA = parseInt(a.guest_id.replace(/\D/g, ""), 10) || 0;
+    const numB = parseInt(b.guest_id.replace(/\D/g, ""), 10) || 0;
+    return numA - numB;
+  });
+
+  const users = Object.values(userCountsMap).sort((a, b) => b.count - a.count);
+
+  return {
+    users,
+    guests,
+    total: records.length,
+  };
 }
 
 function extractBearerToken(req: Request): string | null {
@@ -1265,6 +1439,60 @@ app.delete("/api/admin/delete", async (req: Request, res: Response) => {
 });
 
 
+// Admin: Delete prompt history item
+app.delete(["/api/admin/prompts/:id", "/api/admin/prompts/delete/:id"], async (req: Request, res: Response) => {
+  try {
+    const user = await getCurrentUser(req);
+    if (!isUserAdminAccount(user, req)) {
+      return res.status(403).json({ error: "Admin authentication required." });
+    }
+
+    const promptId = req.params.id || req.body?.id;
+    if (!promptId) {
+      return res.status(400).json({ error: "Prompt ID is required." });
+    }
+
+    await deletePromptHistoryItem(promptId);
+    return res.json({ success: true, message: "Question generation record deleted successfully." });
+  } catch (err: any) {
+    return res.status(500).json({ error: "Failed to delete question generation record." });
+  }
+});
+
+app.post("/api/admin/prompts/delete", async (req: Request, res: Response) => {
+  try {
+    const user = await getCurrentUser(req);
+    if (!isUserAdminAccount(user, req)) {
+      return res.status(403).json({ error: "Admin authentication required." });
+    }
+
+    const { id } = req.body || {};
+    if (!id) {
+      return res.status(400).json({ error: "Prompt ID is required." });
+    }
+
+    await deletePromptHistoryItem(id);
+    return res.json({ success: true, message: "Question generation record deleted successfully." });
+  } catch (err: any) {
+    return res.status(500).json({ error: "Failed to delete question generation record." });
+  }
+});
+
+// Admin: Get translation feature usage stats
+app.get("/api/admin/translations", async (req: Request, res: Response) => {
+  try {
+    const user = await getCurrentUser(req);
+    if (!isUserAdminAccount(user, req)) {
+      return res.status(403).json({ error: "Admin authentication required." });
+    }
+
+    const stats = await getTranslationStats();
+    return res.json(stats);
+  } catch (err: any) {
+    return res.status(500).json({ error: "Failed to fetch translation usage stats." });
+  }
+});
+
 app.post("/api/translate", async (req: Request, res: Response) => {
   const payload = req.body || {};
   const text = (payload.text || "").trim();
@@ -1272,6 +1500,26 @@ app.post("/api/translate", async (req: Request, res: Response) => {
 
   if (!text) {
     return res.status(400).json({ error: "Please enter text to translate." });
+  }
+
+  // Identify user or guest
+  const user = await getCurrentUser(req);
+  let guestId: string | undefined = undefined;
+
+  if (!user) {
+    let existingGuestId = req.cookies?.guest_id || req.headers["x-guest-id"] || payload.guestId;
+    if (existingGuestId && typeof existingGuestId === "string" && /^guest-\d+$/i.test(existingGuestId.trim())) {
+      guestId = existingGuestId.trim().toLowerCase();
+    } else {
+      guestId = await getNextGuestIdentifier();
+    }
+    // Set guest_id cookie for persistence across unauthenticated sessions
+    res.cookie("guest_id", guestId, {
+      httpOnly: false,
+      secure: true,
+      sameSite: "none",
+      maxAge: 365 * 24 * 60 * 60 * 1000,
+    });
   }
 
   const apiKey = process.env.GEMINI_API_KEY_TRANSLATE;
@@ -1332,7 +1580,21 @@ ${text}`;
     });
     const unicodeTranslation = (response.text || "").trim();
     const legacyTranslation = ConvertToLegacy(unicodeTranslation);
-    return res.json({ translation: legacyTranslation, unicode: unicodeTranslation });
+
+    // Record translation usage stats
+    try {
+      await recordTranslation({
+        userId: user?.id,
+        userEmail: user?.email,
+        userName: user?.name,
+        isGuest: !user,
+        guestIdentifier: guestId,
+      });
+    } catch (err) {
+      console.error("Failed to record translation usage:", err);
+    }
+
+    return res.json({ translation: legacyTranslation, unicode: unicodeTranslation, guest_id: guestId });
   } catch (exc: any) {
     return res.status(502).json({ error: `The Gemini API request failed: ${exc?.message || exc}` });
   }

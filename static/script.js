@@ -93,6 +93,7 @@
   const adminSecVocab = document.getElementById("admin-sec-vocab");
 
   const adminUsersList = document.getElementById("admin-users-list");
+  const adminGuestsList = document.getElementById("admin-guests-list");
   const adminPromptSearch = document.getElementById("admin-prompt-search");
   const adminTypeFilter = document.getElementById("admin-type-filter");
   const adminPromptsList = document.getElementById("admin-prompts-list");
@@ -105,6 +106,7 @@
   const adminActiveListEl = document.getElementById("admin-active-list");
 
   let adminPromptsData = [];
+  let adminTranslationStats = { users: [], guests: [], total: 0 };
 
   // LocalStorage Keys
   const STORAGE_KEY_API = "gemini_api_key";
@@ -632,15 +634,25 @@
     setStatus(translateStatusEl, "Translating text into Sinhala…", "info");
 
     try {
+      const reqHeaders = { "Content-Type": "application/json" };
+      const token = localStorage.getItem(STORAGE_KEY_TOKEN);
+      if (token) reqHeaders["Authorization"] = `Bearer ${token}`;
+      const savedGuestId = localStorage.getItem("guest_id");
+      if (savedGuestId) reqHeaders["x-guest-id"] = savedGuestId;
+
       const response = await fetch("/api/translate", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ apiKey, text, model }),
+        headers: reqHeaders,
+        body: JSON.stringify({ apiKey, text, model, guestId: savedGuestId }),
       });
 
       const data = await response.json();
       if (!response.ok || data.error) {
         throw new Error(data.error || "Translation request failed.");
+      }
+
+      if (data.guest_id) {
+        localStorage.setItem("guest_id", data.guest_id);
       }
 
       if (translateResultInput) {
@@ -789,21 +801,24 @@
       const headers = getAuthHeaders();
       headers["x-admin-pass"] = "ictfromabcadmin";
 
-      const [pendingRes, activeRes, usersRes, promptsRes] = await Promise.all([
+      const [pendingRes, activeRes, usersRes, promptsRes, transRes] = await Promise.all([
         fetch("/api/admin/pending", { headers }),
         fetch("/api/vocabulary"),
         fetch("/api/admin/users", { headers }),
         fetch("/api/admin/prompts", { headers }),
+        fetch("/api/admin/translations", { headers }),
       ]);
 
       const pending = pendingRes.ok ? await pendingRes.json() : [];
       const active = activeRes.ok ? await activeRes.json() : [];
       const users = usersRes.ok ? await usersRes.json() : [];
       adminPromptsData = promptsRes.ok ? await promptsRes.json() : [];
+      adminTranslationStats = transRes.ok ? await transRes.json() : { users: [], guests: [], total: 0 };
 
       renderAdminPending(pending);
       renderAdminActive(active);
       renderAdminUsers(users);
+      renderAdminGuests();
       renderAdminPrompts();
     } catch (err) {
       setStatus(adminStatusEl, "Error loading admin data.", "error");
@@ -815,23 +830,55 @@
     adminUsersList.innerHTML = "";
 
     if (!users || users.length === 0) {
-      adminUsersList.innerHTML = `<tr><td colspan="5" class="empty-vocab">No registered users yet.</td></tr>`;
+      adminUsersList.innerHTML = `<tr><td colspan="6" class="empty-vocab">No registered users yet.</td></tr>`;
       return;
+    }
+
+    const userStatsMap = {};
+    if (adminTranslationStats && adminTranslationStats.users) {
+      adminTranslationStats.users.forEach((st) => {
+        userStatsMap[st.user_id] = st.count;
+      });
     }
 
     users.forEach((u) => {
       const tr = document.createElement("tr");
       const dateStr = u.created_at ? new Date(u.created_at).toLocaleDateString() : "N/A";
       const authProvider = (u.auth_provider || "google").toUpperCase();
+      const translationCount = userStatsMap[u.id] || 0;
 
       tr.innerHTML = `
         <td><strong>${escapeHtml(u.name || "User")}</strong></td>
         <td>${escapeHtml(u.email)}</td>
         <td><span class="user-role-badge">${escapeHtml(authProvider)}</span></td>
         <td><span class="user-role-badge" style="${u.role === "admin" ? "color:#ef4444;" : ""}">${escapeHtml(u.role || "user")}</span></td>
+        <td><strong>${translationCount}</strong></td>
         <td>${dateStr}</td>
       `;
       adminUsersList.appendChild(tr);
+    });
+  }
+
+  function renderAdminGuests() {
+    if (!adminGuestsList) return;
+    adminGuestsList.innerHTML = "";
+
+    const guests = adminTranslationStats?.guests || [];
+    if (guests.length === 0) {
+      adminGuestsList.innerHTML = `<tr><td colspan="3" class="empty-vocab">No guest translation usage recorded yet.</td></tr>`;
+      return;
+    }
+
+    guests.forEach((g) => {
+      const tr = document.createElement("tr");
+      const dateStr = g.last_translated ? new Date(g.last_translated).toLocaleString() : "N/A";
+
+      tr.innerHTML = `
+        <td><strong>${escapeHtml(g.guest_id)}</strong></td>
+        <td><strong>${g.count}</strong></td>
+        <td>${dateStr}</td>
+      `;
+      adminGuestsList.appendChild(tr);
     });
   }
 
@@ -871,7 +918,10 @@
             <span>${escapeHtml(p.user_name || "User")}</span>
             <span class="prompt-user-email">(${escapeHtml(p.user_email || "")})</span>
           </div>
-          <span class="qtype-tag ${qtypeClass}">${escapeHtml(p.qtype || "normal")}</span>
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <span class="qtype-tag ${qtypeClass}">${escapeHtml(p.qtype || "normal")}</span>
+            <button type="button" class="btn-sm btn-delete prompt-delete-btn" data-id="${p.id}" style="padding: 2px 8px; font-size: 11px;">Delete</button>
+          </div>
         </div>
         <div class="prompt-topic-text">${escapeHtml(p.topic || "")}</div>
         <div class="prompt-meta-footer">
@@ -880,8 +930,39 @@
         </div>
       `;
 
+      const deleteBtn = card.querySelector(".prompt-delete-btn");
+      if (deleteBtn) {
+        deleteBtn.addEventListener("click", () => deletePromptRecord(p.id));
+      }
+
       adminPromptsList.appendChild(card);
     });
+  }
+
+  async function deletePromptRecord(id) {
+    if (!id) return;
+    if (!confirm("Are you sure you want to delete this question generation record?")) return;
+
+    try {
+      const headers = getAuthHeaders();
+      headers["x-admin-pass"] = "ictfromabcadmin";
+
+      const res = await fetch(`/api/admin/prompts/${id}`, {
+        method: "DELETE",
+        headers,
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || "Failed to delete question generation record.");
+      }
+
+      adminPromptsData = adminPromptsData.filter((item) => item.id !== id);
+      renderAdminPrompts();
+      setStatus(adminStatusEl, "Question generation record deleted.", "success");
+    } catch (err) {
+      setStatus(adminStatusEl, err.message || "Failed to delete record.", "error");
+    }
   }
 
   if (adminPromptSearch) {
