@@ -93,6 +93,7 @@
   const adminSecVocab = document.getElementById("admin-sec-vocab");
 
   const adminUsersList = document.getElementById("admin-users-list");
+  const adminGuestsList = document.getElementById("admin-guests-list");
   const adminPromptSearch = document.getElementById("admin-prompt-search");
   const adminTypeFilter = document.getElementById("admin-type-filter");
   const adminPromptsList = document.getElementById("admin-prompts-list");
@@ -105,6 +106,7 @@
   const adminActiveListEl = document.getElementById("admin-active-list");
 
   let adminPromptsData = [];
+  let adminTranslationStats = { users: [], guests: [], total: 0 };
 
   // LocalStorage Keys
   const STORAGE_KEY_API = "gemini_api_key";
@@ -279,9 +281,104 @@
     });
   }
 
-  // Google OAuth Popup Trigger
+  function handleAuthSuccess(u) {
+    if (!u) return;
+    if (u.token) {
+      localStorage.setItem(STORAGE_KEY_TOKEN, u.token);
+    }
+    currentUser = u;
+    updateAuthUI();
+    closeAuthModal();
+    checkAdminAccess();
+  }
+
+  async function handleGoogleCredential(credential) {
+    try {
+      setStatus(authStatusEl, "Signing in with Google…", "info");
+      const res = await fetch("/api/auth/google/credential", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ credential }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || "Google Sign-In failed.");
+      }
+      handleAuthSuccess(data.user);
+      setStatus(authStatusEl, "Successfully signed in!", "success");
+    } catch (err) {
+      setStatus(authStatusEl, err.message || "Failed to sign in with Google.", "error");
+    }
+  }
+
+  let gisInitialized = false;
+
+  async function initGoogleAuth() {
+    try {
+      const configRes = await fetch("/api/auth/google/config");
+      const configData = await configRes.json();
+
+      if (!configData.configured || !configData.clientId) {
+        if (googleSigninBtn) googleSigninBtn.style.display = "flex";
+        return;
+      }
+
+      const clientId = configData.clientId;
+
+      function renderGsiButton() {
+        if (typeof google === "undefined" || !google.accounts || !google.accounts.id) {
+          setTimeout(renderGsiButton, 200);
+          return;
+        }
+        try {
+          google.accounts.id.initialize({
+            client_id: clientId,
+            callback: async (response) => {
+              if (response && response.credential) {
+                await handleGoogleCredential(response.credential);
+              }
+            },
+            auto_select: false,
+            cancel_on_tap_outside: true,
+          });
+
+          gisInitialized = true;
+
+          const container = document.getElementById("g_id_signin");
+          if (container) {
+            container.innerHTML = "";
+            google.accounts.id.renderButton(container, {
+              theme: "outline",
+              size: "large",
+              type: "standard",
+              text: "continue_with",
+              shape: "rectangular",
+              width: 280,
+            });
+            if (googleSigninBtn) googleSigninBtn.style.display = "none";
+          }
+        } catch (err) {
+          console.error("GIS initialization error:", err);
+          if (googleSigninBtn) googleSigninBtn.style.display = "flex";
+        }
+      }
+
+      renderGsiButton();
+    } catch (err) {
+      if (googleSigninBtn) googleSigninBtn.style.display = "flex";
+    }
+  }
+
+  // Initialize Google Auth on page load
+  initGoogleAuth();
+
+  // Fallback Google OAuth Trigger
   if (googleSigninBtn) {
     googleSigninBtn.addEventListener("click", async () => {
+      if (gisInitialized && typeof google !== "undefined" && google.accounts && google.accounts.id) {
+        google.accounts.id.prompt();
+        return;
+      }
       try {
         setStatus(authStatusEl, "Connecting to Google OAuth…", "info");
         const clientRedirectUri = `${window.location.origin}/api/auth/google/callback`;
@@ -292,38 +389,36 @@
           const redirectUriToUse = data.redirectUri || clientRedirectUri;
           setStatus(
             authStatusEl,
-            `Google Client ID is not configured in settings.<br><small style="opacity:0.85;display:block;margin-top:4px;">Authorized Callback URI: <code>${redirectUriToUse}</code></small>`,
+            `Google Client ID is not configured.<br><small style="opacity:0.85;display:block;margin-top:4px;">Authorized Callback URI: <code>${redirectUriToUse}</code></small>`,
             "error"
           );
           return;
         }
 
-        const width = 500;
-        const height = 600;
-        const left = window.screen.width / 2 - width / 2;
-        const top = window.screen.height / 2 - height / 2;
-
-        window.open(
-          data.url,
-          "google_oauth_popup",
-          `width=${width},height=${height},top=${top},left=${left},scrollbars=yes`
-        );
+        window.location.href = data.url;
       } catch (err) {
         setStatus(authStatusEl, "Failed to initiate Google OAuth flow.", "error");
       }
     });
   }
 
+  // Listen for storage events across tabs/windows
+  window.addEventListener("storage", (e) => {
+    if (e.key === "oauth_auth_success" && e.newValue) {
+      try {
+        const parsed = JSON.parse(e.newValue);
+        if (parsed && parsed.user) {
+          localStorage.removeItem("oauth_auth_success");
+          handleAuthSuccess(parsed.user);
+        }
+      } catch (_) {}
+    }
+  });
+
   // Listen for OAuth Success/Error message from popup window
   window.addEventListener("message", (event) => {
     if (event.data && event.data.type === "OAUTH_AUTH_SUCCESS") {
-      const u = event.data.user;
-      if (u && u.token) {
-        localStorage.setItem(STORAGE_KEY_TOKEN, u.token);
-      }
-      currentUser = u;
-      updateAuthUI();
-      closeAuthModal();
+      handleAuthSuccess(event.data.user);
     } else if (event.data && event.data.type === "OAUTH_AUTH_ERROR") {
       const errMsg = event.data.error || "Google Sign-In failed.";
       const clientRedirectUri = `${window.location.origin}/api/auth/google/callback`;
@@ -632,15 +727,25 @@
     setStatus(translateStatusEl, "Translating text into Sinhala…", "info");
 
     try {
+      const reqHeaders = { "Content-Type": "application/json" };
+      const token = localStorage.getItem(STORAGE_KEY_TOKEN);
+      if (token) reqHeaders["Authorization"] = `Bearer ${token}`;
+      const savedGuestId = localStorage.getItem("guest_id");
+      if (savedGuestId) reqHeaders["x-guest-id"] = savedGuestId;
+
       const response = await fetch("/api/translate", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ apiKey, text, model }),
+        headers: reqHeaders,
+        body: JSON.stringify({ apiKey, text, model, guestId: savedGuestId }),
       });
 
       const data = await response.json();
       if (!response.ok || data.error) {
         throw new Error(data.error || "Translation request failed.");
+      }
+
+      if (data.guest_id) {
+        localStorage.setItem("guest_id", data.guest_id);
       }
 
       if (translateResultInput) {
@@ -789,21 +894,24 @@
       const headers = getAuthHeaders();
       headers["x-admin-pass"] = "ictfromabcadmin";
 
-      const [pendingRes, activeRes, usersRes, promptsRes] = await Promise.all([
+      const [pendingRes, activeRes, usersRes, promptsRes, transRes] = await Promise.all([
         fetch("/api/admin/pending", { headers }),
         fetch("/api/vocabulary"),
         fetch("/api/admin/users", { headers }),
         fetch("/api/admin/prompts", { headers }),
+        fetch("/api/admin/translations", { headers }),
       ]);
 
       const pending = pendingRes.ok ? await pendingRes.json() : [];
       const active = activeRes.ok ? await activeRes.json() : [];
       const users = usersRes.ok ? await usersRes.json() : [];
       adminPromptsData = promptsRes.ok ? await promptsRes.json() : [];
+      adminTranslationStats = transRes.ok ? await transRes.json() : { users: [], guests: [], total: 0 };
 
       renderAdminPending(pending);
       renderAdminActive(active);
       renderAdminUsers(users);
+      renderAdminGuests();
       renderAdminPrompts();
     } catch (err) {
       setStatus(adminStatusEl, "Error loading admin data.", "error");
@@ -815,23 +923,55 @@
     adminUsersList.innerHTML = "";
 
     if (!users || users.length === 0) {
-      adminUsersList.innerHTML = `<tr><td colspan="5" class="empty-vocab">No registered users yet.</td></tr>`;
+      adminUsersList.innerHTML = `<tr><td colspan="6" class="empty-vocab">No registered users yet.</td></tr>`;
       return;
+    }
+
+    const userStatsMap = {};
+    if (adminTranslationStats && adminTranslationStats.users) {
+      adminTranslationStats.users.forEach((st) => {
+        userStatsMap[st.user_id] = st.count;
+      });
     }
 
     users.forEach((u) => {
       const tr = document.createElement("tr");
       const dateStr = u.created_at ? new Date(u.created_at).toLocaleDateString() : "N/A";
       const authProvider = (u.auth_provider || "google").toUpperCase();
+      const translationCount = userStatsMap[u.id] || 0;
 
       tr.innerHTML = `
         <td><strong>${escapeHtml(u.name || "User")}</strong></td>
         <td>${escapeHtml(u.email)}</td>
         <td><span class="user-role-badge">${escapeHtml(authProvider)}</span></td>
         <td><span class="user-role-badge" style="${u.role === "admin" ? "color:#ef4444;" : ""}">${escapeHtml(u.role || "user")}</span></td>
+        <td><strong>${translationCount}</strong></td>
         <td>${dateStr}</td>
       `;
       adminUsersList.appendChild(tr);
+    });
+  }
+
+  function renderAdminGuests() {
+    if (!adminGuestsList) return;
+    adminGuestsList.innerHTML = "";
+
+    const guests = adminTranslationStats?.guests || [];
+    if (guests.length === 0) {
+      adminGuestsList.innerHTML = `<tr><td colspan="3" class="empty-vocab">No guest translation usage recorded yet.</td></tr>`;
+      return;
+    }
+
+    guests.forEach((g) => {
+      const tr = document.createElement("tr");
+      const dateStr = g.last_translated ? new Date(g.last_translated).toLocaleString() : "N/A";
+
+      tr.innerHTML = `
+        <td><strong>${escapeHtml(g.guest_id)}</strong></td>
+        <td><strong>${g.count}</strong></td>
+        <td>${dateStr}</td>
+      `;
+      adminGuestsList.appendChild(tr);
     });
   }
 
@@ -871,7 +1011,10 @@
             <span>${escapeHtml(p.user_name || "User")}</span>
             <span class="prompt-user-email">(${escapeHtml(p.user_email || "")})</span>
           </div>
-          <span class="qtype-tag ${qtypeClass}">${escapeHtml(p.qtype || "normal")}</span>
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <span class="qtype-tag ${qtypeClass}">${escapeHtml(p.qtype || "normal")}</span>
+            <button type="button" class="btn-sm btn-delete prompt-delete-btn" data-id="${p.id}" style="padding: 2px 8px; font-size: 11px;">Delete</button>
+          </div>
         </div>
         <div class="prompt-topic-text">${escapeHtml(p.topic || "")}</div>
         <div class="prompt-meta-footer">
@@ -880,8 +1023,39 @@
         </div>
       `;
 
+      const deleteBtn = card.querySelector(".prompt-delete-btn");
+      if (deleteBtn) {
+        deleteBtn.addEventListener("click", () => deletePromptRecord(p.id));
+      }
+
       adminPromptsList.appendChild(card);
     });
+  }
+
+  async function deletePromptRecord(id) {
+    if (!id) return;
+    if (!confirm("Are you sure you want to delete this question generation record?")) return;
+
+    try {
+      const headers = getAuthHeaders();
+      headers["x-admin-pass"] = "ictfromabcadmin";
+
+      const res = await fetch(`/api/admin/prompts/${id}`, {
+        method: "DELETE",
+        headers,
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || "Failed to delete question generation record.");
+      }
+
+      adminPromptsData = adminPromptsData.filter((item) => item.id !== id);
+      renderAdminPrompts();
+      setStatus(adminStatusEl, "Question generation record deleted.", "success");
+    } catch (err) {
+      setStatus(adminStatusEl, err.message || "Failed to delete record.", "error");
+    }
   }
 
   if (adminPromptSearch) {
