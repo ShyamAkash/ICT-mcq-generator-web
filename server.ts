@@ -972,7 +972,7 @@ app.get(["/api/auth/google/callback", "/api/auth/google/callback/"], async (req:
     const picture = gUser.picture || "";
 
     let role = "user";
-    if (email.toLowerCase() === "sachoice51@gmail.com" || email.toLowerCase().includes("admin")) {
+    if (email.toLowerCase() === "sachoice51@gmail.com") {
       role = "admin";
     }
 
