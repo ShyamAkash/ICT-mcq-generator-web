@@ -287,6 +287,7 @@
                     <th>Email</th>
                     <th>Auth Method</th>
                     <th>Role</th>
+                    <th>Translations</th>
                     <th>Registered Date</th>
                   </tr>
                 </thead>
@@ -296,7 +297,24 @@
               </table>
             </div>
 
-            <div class="section-heading" style="margin-top: 24px;">Question Generation Prompts (Separated By User & Type)</div>
+            <!-- Guest Translations Section -->
+            <div class="section-heading" style="margin-top: 24px;">Guest Translation Usage (Unauthenticated Users)</div>
+            <div class="admin-table-wrapper">
+              <table class="admin-table">
+                <thead>
+                  <tr>
+                    <th>Guest Identifier</th>
+                    <th>Translations Used</th>
+                    <th>Last Activity</th>
+                  </tr>
+                </thead>
+                <tbody id="admin-guests-list">
+                  <!-- Dynamically populated -->
+                </tbody>
+              </table>
+            </div>
+
+            <div class="section-heading" style="margin-top: 24px;">Question Generation Records (Separated By User & Type)</div>
             <div class="prompt-filter-bar">
               <input type="text" id="admin-prompt-search" placeholder="Search prompts or user email..." class="search-input">
               <select id="admin-type-filter" class="type-select">
