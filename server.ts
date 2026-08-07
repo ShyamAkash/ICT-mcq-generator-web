@@ -1057,46 +1057,6 @@ app.post("/api/auth/register", async (req: Request, res: Response) => {
   });
 });
 
-// Email/Password Login
-app.post("/api/auth/login", async (req: Request, res: Response) => {
-  const { email, password } = req.body || {};
-  if (!email || !password) {
-    return res.status(400).json({ error: "Email and password are required." });
-  }
-
-  const cleanEmail = String(email).trim().toLowerCase();
-  try {
-    const user = await findUserByEmail(cleanEmail);
-    if (!user) {
-      return res.status(400).json({ error: "Invalid email or password." });
-    }
-
-    if (user.password_hash) {
-      const hash = crypto.createHash("sha256").update(password).digest("hex");
-      if (user.password_hash !== hash) {
-        return res.status(400).json({ error: "Invalid email or password." });
-      }
-    }
-
-    await updateUserLastLogin(user.id);
-    const session = await createSession(user.id);
-    setSessionCookie(res, session.id);
-
-    return res.json({
-      success: true,
-      user: {
-        id: user.id,
-        email: user.email,
-        name: user.name,
-        picture: user.picture,
-        role: user.role,
-        token: session.id,
-      },
-    });
-  } catch (err: any) {
-    return res.status(500).json({ error: "Sign in failed. Please try again." });
-  }
-});
 
 // Logout
 app.post("/api/auth/logout", async (req: Request, res: Response) => {
