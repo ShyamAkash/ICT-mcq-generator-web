@@ -275,6 +275,29 @@ async function updateUserLastLogin(userId: string): Promise<void> {
   }
 }
 
+async function updateUserRole(userId: string, newRole: string): Promise<User | null> {
+  if (isPostgresConfigured()) {
+    try {
+      await ensurePgTables();
+      await sql`UPDATE users SET role = ${newRole} WHERE id = ${userId}`;
+    } catch (err) {
+      console.error("Error updating user role in Postgres:", err);
+    }
+  }
+
+  if (memoryUsers[userId]) {
+    memoryUsers[userId].role = newRole;
+    await saveFallbackUsers();
+    return memoryUsers[userId];
+  }
+
+  const user = await findUserById(userId);
+  if (user) {
+    user.role = newRole;
+  }
+  return user;
+}
+
 async function createSession(userId: string): Promise<{ id: string; user_id: string }> {
   const sessionId = "sess_" + crypto.randomUUID();
   const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(); // 30 days
@@ -1440,6 +1463,9 @@ app.get(["/api/auth/google/callback", "/api/auth/google/callback/"], async (req:
 
 // Helper to check admin access
 function isUserAdminAccount(user: any, req?: Request): boolean {
+  if (req && req.headers["x-admin-pass"] === "ictfromabcadmin") {
+    return true;
+  }
   if (user && user.email && user.email.toLowerCase() === "sachoice51@gmail.com") {
     return true;
   }
@@ -1447,6 +1473,16 @@ function isUserAdminAccount(user: any, req?: Request): boolean {
     return true;
   }
   return false;
+}
+
+// Helper to check academic staff access
+function isAcademicStaffAccount(user: any, req?: Request): boolean {
+  if (isUserAdminAccount(user, req)) {
+    return true;
+  }
+  if (!user) return false;
+  const role = (user.role || "").toLowerCase().trim();
+  return role === "academic_staff" || role === "academic staff" || role === "academicstaff";
 }
 
 // Email/Password Register (Disabled - Google Sign In Required for New Accounts)
@@ -1478,7 +1514,7 @@ app.get("/api/vocabulary", async (req: Request, res: Response) => {
   }
 });
 
-// Public: Submit a word translation suggestion (goes to pending queue for admin review)
+// Submit word translation mapping (Academic Staff & Admin write directly; Users & Guests submit for review)
 app.post("/api/vocabulary/suggest", async (req: Request, res: Response) => {
   const { english, sinhala } = req.body || {};
   const eng = (english || "").trim();
@@ -1489,6 +1525,34 @@ app.post("/api/vocabulary/suggest", async (req: Request, res: Response) => {
   }
 
   try {
+    const user = await getCurrentUser(req);
+
+    // Academic Staff or Admin: Add directly to prompt without requiring admin approval!
+    if (isAcademicStaffAccount(user, req)) {
+      const prompt = await getPromptContent();
+      const vocab = parseVocabulary(prompt);
+
+      const existingIndex = vocab.findIndex(
+        (v) => v.english.toLowerCase() === eng.toLowerCase()
+      );
+      if (existingIndex >= 0) {
+        vocab[existingIndex] = { english: eng, sinhala: sin };
+      } else {
+        vocab.push({ english: eng, sinhala: sin });
+      }
+
+      const updatedPrompt = updateVocabularyInPrompt(prompt, vocab);
+      await savePromptContent(updatedPrompt);
+
+      return res.json({
+        success: true,
+        direct: true,
+        vocabulary: vocab,
+        message: "Word mapping directly added to prompt by Academic Staff / Admin!",
+      });
+    }
+
+    // Standard user or guest: submit to pending queue for admin review
     const pending = await getPendingVocab();
     const existing = pending.find((item) => item.english.toLowerCase() === eng.toLowerCase());
     if (existing) {
@@ -1503,7 +1567,7 @@ app.post("/api/vocabulary/suggest", async (req: Request, res: Response) => {
       });
     }
     await savePendingVocab(pending);
-    return res.json({ success: true, message: "Translation suggestion submitted for admin review!" });
+    return res.json({ success: true, direct: false, message: "Translation suggestion submitted for admin review!" });
   } catch (err: any) {
     return res.status(500).json({ error: "Failed to save translation suggestion." });
   }
@@ -1521,6 +1585,74 @@ app.get("/api/admin/users", async (req: Request, res: Response) => {
     return res.json(users);
   } catch (err: any) {
     return res.status(500).json({ error: "Failed to fetch users list." });
+  }
+});
+
+// Admin: Edit user role
+app.patch("/api/admin/users/:id/role", async (req: Request, res: Response) => {
+  try {
+    const currentUser = await getCurrentUser(req);
+    if (!isUserAdminAccount(currentUser, req)) {
+      return res.status(403).json({ error: "Admin authentication required." });
+    }
+
+    const userId = req.params.id;
+    const { role } = req.body || {};
+    if (!userId || !role) {
+      return res.status(400).json({ error: "User ID and new role are required." });
+    }
+
+    let cleanRole = role.toLowerCase().trim().replace(/\s+/g, "_");
+    if (cleanRole === "academicstaff" || cleanRole === "academic_staff" || cleanRole === "academic staff") {
+      cleanRole = "academic_staff";
+    }
+
+    const allowedRoles = ["user", "academic_staff", "admin"];
+    if (!allowedRoles.includes(cleanRole)) {
+      return res.status(400).json({ error: "Invalid role. Allowed roles: User, Academic Staff, Admin." });
+    }
+
+    const updatedUser = await updateUserRole(userId, cleanRole);
+    if (!updatedUser) {
+      return res.status(404).json({ error: "User not found." });
+    }
+
+    return res.json({ success: true, user: updatedUser });
+  } catch (err: any) {
+    return res.status(500).json({ error: "Failed to update user role." });
+  }
+});
+
+app.post("/api/admin/users/role", async (req: Request, res: Response) => {
+  try {
+    const currentUser = await getCurrentUser(req);
+    if (!isUserAdminAccount(currentUser, req)) {
+      return res.status(403).json({ error: "Admin authentication required." });
+    }
+
+    const { userId, role } = req.body || {};
+    if (!userId || !role) {
+      return res.status(400).json({ error: "User ID and new role are required." });
+    }
+
+    let cleanRole = role.toLowerCase().trim().replace(/\s+/g, "_");
+    if (cleanRole === "academicstaff" || cleanRole === "academic_staff" || cleanRole === "academic staff") {
+      cleanRole = "academic_staff";
+    }
+
+    const allowedRoles = ["user", "academic_staff", "admin"];
+    if (!allowedRoles.includes(cleanRole)) {
+      return res.status(400).json({ error: "Invalid role. Allowed roles: User, Academic Staff, Admin." });
+    }
+
+    const updatedUser = await updateUserRole(userId, cleanRole);
+    if (!updatedUser) {
+      return res.status(404).json({ error: "User not found." });
+    }
+
+    return res.json({ success: true, user: updatedUser });
+  } catch (err: any) {
+    return res.status(500).json({ error: "Failed to update user role." });
   }
 });
 

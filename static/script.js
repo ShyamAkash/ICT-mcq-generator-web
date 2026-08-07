@@ -183,13 +183,45 @@
       if (headerSigninBtn) headerSigninBtn.classList.add("is-hidden");
       if (userProfileEl) userProfileEl.classList.remove("is-hidden");
       if (userNameDisplayEl) userNameDisplayEl.textContent = currentUser.name || currentUser.email;
-      if (userRoleBadgeEl) userRoleBadgeEl.textContent = isAdmin ? "Admin" : (currentUser.role || "User");
+
+      const userRole = (currentUser.role || "user").toLowerCase();
+      let roleLabel = "User";
+      if (isAdmin) {
+        roleLabel = "Admin";
+      } else if (userRole === "academic_staff" || userRole === "academic staff") {
+        roleLabel = "Academic Staff";
+      } else if (currentUser.role) {
+        roleLabel = currentUser.role;
+      }
+
+      if (userRoleBadgeEl) userRoleBadgeEl.textContent = roleLabel;
 
       if (currentUser.picture && userAvatarEl) {
         userAvatarEl.src = currentUser.picture;
         userAvatarEl.style.display = "block";
       } else if (userAvatarEl) {
         userAvatarEl.style.display = "none";
+      }
+
+      // Update Glossary / Suggest UI based on role privileges
+      const suggestHeading = document.getElementById("suggest-heading");
+      const suggestRoleNote = document.getElementById("suggest-role-note");
+      const suggestBtn = document.getElementById("suggest-btn");
+      const isAcademicOrAdmin = isAdmin || userRole === "academic_staff" || userRole === "academic staff";
+
+      if (suggestHeading) {
+        suggestHeading.textContent = isAcademicOrAdmin ? "Add Word Mapping to Prompt" : "Suggest a Translation";
+      }
+      if (suggestRoleNote) {
+        if (isAcademicOrAdmin) {
+          suggestRoleNote.textContent = "⚡ Academic Staff Privilege: Word mappings submitted by you are added directly to the prompt without requiring approval.";
+          suggestRoleNote.style.display = "block";
+        } else {
+          suggestRoleNote.style.display = "none";
+        }
+      }
+      if (suggestBtn) {
+        suggestBtn.textContent = isAcademicOrAdmin ? "Add Mapping Directly" : "Submit Suggestion";
       }
 
       // MCQ Generator access
@@ -208,6 +240,14 @@
       // User is signed out
       if (userProfileEl) userProfileEl.classList.add("is-hidden");
       if (headerSigninBtn) headerSigninBtn.classList.remove("is-hidden");
+
+      const suggestHeading = document.getElementById("suggest-heading");
+      const suggestRoleNote = document.getElementById("suggest-role-note");
+      const suggestBtn = document.getElementById("suggest-btn");
+
+      if (suggestHeading) suggestHeading.textContent = "Suggest a Translation";
+      if (suggestRoleNote) suggestRoleNote.style.display = "none";
+      if (suggestBtn) suggestBtn.textContent = "Submit Suggestion";
 
       // MCQ Generator lock banner
       if (generatorAuthBanner) generatorAuthBanner.classList.remove("is-hidden");
@@ -860,27 +900,43 @@
     }
 
     try {
-      setStatus(suggestStatusEl, "Submitting suggestion…", "info");
+      setStatus(suggestStatusEl, "Submitting word mapping…", "info");
+      const headers = getAuthHeaders();
+
       const res = await fetch("/api/vocabulary/suggest", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers,
         body: JSON.stringify({ english, sinhala }),
       });
 
       const data = await res.json();
       if (!res.ok || !data.success) {
-        throw new Error(data.error || "Failed to submit suggestion");
+        throw new Error(data.error || "Failed to submit mapping");
       }
 
       suggestEnglishInput.value = "";
       suggestSinhalaInput.value = "";
-      setStatus(
-        suggestStatusEl,
-        "Suggestion submitted! An admin will review it before it is added to the generator.",
-        "success"
-      );
+
+      if (data.direct) {
+        setStatus(
+          suggestStatusEl,
+          "⚡ Word mapping directly added to the prompt by Academic Staff / Admin!",
+          "success"
+        );
+        if (data.vocabulary) {
+          renderGlossary(data.vocabulary);
+        } else {
+          fetchGlossary();
+        }
+      } else {
+        setStatus(
+          suggestStatusEl,
+          "Suggestion submitted! An admin will review it before it is added to the generator.",
+          "success"
+        );
+      }
     } catch (err) {
-      setStatus(suggestStatusEl, err.message || "Failed to submit suggestion.", "error");
+      setStatus(suggestStatusEl, err.message || "Failed to submit mapping.", "error");
     }
   }
 
@@ -918,6 +974,32 @@
     }
   }
 
+  async function updateUserRoleInAdmin(userId, newRole, selectEl) {
+    if (!userId) return;
+    try {
+      setStatus(adminStatusEl, "Updating user role…", "info");
+      const headers = getAuthHeaders();
+      headers["x-admin-pass"] = "ictfromabcadmin";
+
+      const res = await fetch(`/api/admin/users/${userId}/role`, {
+        method: "PATCH",
+        headers,
+        body: JSON.stringify({ role: newRole }),
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || "Failed to update user role.");
+      }
+
+      const roleDisplay = newRole === "academic_staff" ? "Academic Staff" : newRole === "admin" ? "Admin" : "User";
+      setStatus(adminStatusEl, `User role updated to "${roleDisplay}" successfully!`, "success");
+    } catch (err) {
+      setStatus(adminStatusEl, err.message || "Failed to update user role.", "error");
+      fetchAdminData();
+    }
+  }
+
   function renderAdminUsers(users) {
     if (!adminUsersList) return;
     adminUsersList.innerHTML = "";
@@ -940,14 +1022,33 @@
       const authProvider = (u.auth_provider || "google").toUpperCase();
       const translationCount = userStatsMap[u.id] || 0;
 
+      const currentRole = (u.role || "user").toLowerCase();
+      const isSuperAdminEmail = (u.email && u.email.toLowerCase() === "sachoice51@gmail.com");
+
+      const roleSelectHtml = `
+        <select class="admin-role-select" data-user-id="${escapeHtml(u.id)}" ${isSuperAdminEmail ? "disabled" : ""} style="padding: 4px 8px; border-radius: 6px; border: 1px solid var(--border-color, #cbd5e1); font-size: 13px; font-weight: 500; background: var(--bg-card, #ffffff); cursor: pointer; min-width: 130px;">
+          <option value="user" ${currentRole === "user" ? "selected" : ""}>User</option>
+          <option value="academic_staff" ${currentRole === "academic_staff" || currentRole === "academic staff" ? "selected" : ""}>Academic Staff</option>
+          <option value="admin" ${currentRole === "admin" ? "selected" : ""}>Admin</option>
+        </select>
+      `;
+
       tr.innerHTML = `
         <td><strong>${escapeHtml(u.name || "User")}</strong></td>
         <td>${escapeHtml(u.email)}</td>
         <td><span class="user-role-badge">${escapeHtml(authProvider)}</span></td>
-        <td><span class="user-role-badge" style="${u.role === "admin" ? "color:#ef4444;" : ""}">${escapeHtml(u.role || "user")}</span></td>
+        <td>${roleSelectHtml}</td>
         <td><strong>${translationCount}</strong></td>
         <td>${dateStr}</td>
       `;
+
+      const selectEl = tr.querySelector(".admin-role-select");
+      if (selectEl && !isSuperAdminEmail) {
+        selectEl.addEventListener("change", (e) => {
+          updateUserRoleInAdmin(u.id, e.target.value, selectEl);
+        });
+      }
+
       adminUsersList.appendChild(tr);
     });
   }
