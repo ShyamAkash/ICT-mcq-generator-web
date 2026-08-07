@@ -127,8 +127,8 @@
 
   function getUserApiKey() {
     return (
-      (apiKeyInput ? apiKeyInput.value.trim() : "") ||
       (translateApiKeyInput ? translateApiKeyInput.value.trim() : "") ||
+      (apiKeyInput ? apiKeyInput.value.trim() : "") ||
       localStorage.getItem(STORAGE_KEY_API) ||
       ""
     );
@@ -140,7 +140,11 @@
     if (translateApiKeyInput) translateApiKeyInput.value = savedKey;
 
     const syncApiKey = (val) => {
-      localStorage.setItem(STORAGE_KEY_API, val);
+      if (val) {
+        localStorage.setItem(STORAGE_KEY_API, val);
+      } else {
+        localStorage.removeItem(STORAGE_KEY_API);
+      }
       if (apiKeyInput && apiKeyInput.value !== val) apiKeyInput.value = val;
       if (translateApiKeyInput && translateApiKeyInput.value !== val) translateApiKeyInput.value = val;
     };
@@ -149,9 +153,15 @@
       apiKeyInput.addEventListener("input", () => {
         syncApiKey(apiKeyInput.value.trim());
       });
+      apiKeyInput.addEventListener("change", () => {
+        syncApiKey(apiKeyInput.value.trim());
+      });
     }
     if (translateApiKeyInput) {
       translateApiKeyInput.addEventListener("input", () => {
+        syncApiKey(translateApiKeyInput.value.trim());
+      });
+      translateApiKeyInput.addEventListener("change", () => {
         syncApiKey(translateApiKeyInput.value.trim());
       });
     }
@@ -771,9 +781,9 @@
   async function handleTranslate(event) {
     event.preventDefault();
 
-    const apiKey = getUserApiKey();
+    const apiKey = (translateApiKeyInput ? translateApiKeyInput.value.trim() : "") || getUserApiKey();
     const text = translateSourceInput ? translateSourceInput.value.trim() : "";
-    const model = modelInput ? modelInput.value.trim() : "gemini-3.6-flash";
+    const model = (modelInput && modelInput.value.trim()) ? modelInput.value.trim() : "gemini-3.6-flash";
 
     if (!text) {
       setStatus(translateStatusEl, "Please enter English text to translate.", "error");
@@ -787,6 +797,9 @@
 
     try {
       const reqHeaders = { "Content-Type": "application/json" };
+      if (apiKey) {
+        reqHeaders["x-api-key"] = apiKey;
+      }
       const token = localStorage.getItem(STORAGE_KEY_TOKEN);
       if (token) reqHeaders["Authorization"] = `Bearer ${token}`;
       const savedGuestId = localStorage.getItem("guest_id");

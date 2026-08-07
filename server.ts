@@ -594,13 +594,19 @@ function extractBearerToken(req: Request): string | null {
 }
 
 async function getCurrentUser(req: Request): Promise<User | null> {
-  const token = req.cookies?.session_id || extractBearerToken(req);
-  if (!token) return null;
+  const token = req.cookies?.session_id || req.cookies?.session_token || extractBearerToken(req);
+  if (!token || token === "[object Object]") return null;
   return await getUserBySession(token);
 }
 
 function setSessionCookie(res: Response, token: string) {
   res.cookie("session_id", token, {
+    httpOnly: true,
+    secure: true,
+    sameSite: "none",
+    maxAge: 30 * 24 * 60 * 60 * 1000,
+  });
+  res.cookie("session_token", token, {
     httpOnly: true,
     secure: true,
     sameSite: "none",
@@ -1256,14 +1262,10 @@ app.post(["/api/auth/google/credential", "/api/auth/google/token"], async (req: 
       }
     }
 
-    const token = await createSession(user.id);
+    const session = await createSession(user.id);
+    const token = session.id;
 
-    res.cookie("session_token", token, {
-      httpOnly: true,
-      secure: true,
-      sameSite: "none",
-      maxAge: 30 * 24 * 60 * 60 * 1000,
-    });
+    setSessionCookie(res, token);
 
     const userWithToken = { ...user, token };
     return res.json({ success: true, user: userWithToken, token });
@@ -1879,10 +1881,11 @@ app.post("/api/translate", async (req: Request, res: Response) => {
     });
   }
 
-  const apiKey = process.env.GEMINI_API_KEY_TRANSLATE;
+  const userApiKey = (payload.apiKey || req.headers["x-api-key"] || "").toString().trim();
+  const apiKey = userApiKey || process.env.GEMINI_API_KEY_TRANSLATE || process.env.GEMINI_API_KEY;
   if (!apiKey) {
     return res.status(500).json({
-      error: "The server is missing its Gemini API configuration.",
+      error: "The server is missing its Gemini API configuration. Please enter a custom Gemini API key.",
     });
   }
 
@@ -1931,11 +1934,42 @@ ${text}`;
 
   try {
     const ai = new GoogleGenAI({ apiKey });
-    const response = await ai.models.generateContent({
-      model: model,
-      contents: translatorSystemPrompt,
-    });
-    const unicodeTranslation = (response.text || "").trim();
+
+    // Build model list: if user provided a custom key, include public model aliases
+    const modelsToTry: string[] = [];
+    if (userApiKey) {
+      if (model && model !== "gemini-3.6-flash") {
+        modelsToTry.push(model);
+      }
+      modelsToTry.push("gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash", "gemini-3.6-flash");
+    } else {
+      modelsToTry.push(model || "gemini-3.6-flash", "gemini-2.5-flash", "gemini-2.0-flash");
+    }
+
+    let unicodeTranslation = "";
+    let lastError: any = null;
+
+    for (const m of modelsToTry) {
+      try {
+        const response = await ai.models.generateContent({
+          model: m,
+          contents: translatorSystemPrompt,
+        });
+        unicodeTranslation = (response.text || "").trim();
+        if (unicodeTranslation) {
+          lastError = null;
+          break;
+        }
+      } catch (err: any) {
+        lastError = err;
+        console.warn(`Translation failed with model ${m} using ${userApiKey ? "custom" : "default"} API key:`, err?.message || err);
+      }
+    }
+
+    if (lastError && !unicodeTranslation) {
+      return res.status(502).json({ error: `The Gemini API request failed: ${lastError?.message || lastError}` });
+    }
+
     const legacyTranslation = ConvertToLegacy(unicodeTranslation);
 
     // Record translation usage stats
@@ -1986,7 +2020,7 @@ app.post("/api/generate", async (req: Request, res: Response) => {
     return res.status(400).json({ error: `Unknown question type '${qtype}'.` });
   }
 
-  const apiKey = userApiKey || process.env.GEMINI_API_KEY;
+  const apiKey = userApiKey || process.env.GEMINI_API_KEY || process.env.GEMINI_API_KEY_TRANSLATE;
   if (!apiKey) {
     return res.status(400).json({
       error:
