@@ -31,6 +31,10 @@
           <span class="menu-icon">🌐</span>
           <span class="menu-text">Translator</span>
         </button>
+        <button type="button" id="menu-item-docx" class="menu-item" role="menuitem">
+          <span class="menu-icon">📄</span>
+          <span class="menu-text">DOCX Translate <small style="opacity:0.85; font-size:12px; font-weight:600;">(beta)</small></span>
+        </button>
         <button type="button" id="menu-item-generator" class="menu-item" role="menuitem">
           <span class="menu-icon">📝</span>
           <span class="menu-text">MCQ Generator</span>
@@ -59,6 +63,10 @@
         <div class="nav-right">
           <nav class="nav-tabs" role="tablist">
             <button type="button" id="tab-translator" class="tab-btn is-active" role="tab" aria-selected="true" aria-controls="view-translator">Translator</button>
+            <button type="button" id="tab-docx" class="tab-btn tab-btn-stacked" role="tab" aria-selected="false" aria-controls="view-docx">
+              <span class="tab-title">DOCX Translate</span>
+              <span class="tab-beta">(beta)</span>
+            </button>
             <button type="button" id="tab-glossary" class="tab-btn" role="tab" aria-selected="false" aria-controls="view-glossary">Glossary</button>
             <button type="button" id="tab-generator" class="tab-btn is-hidden" role="tab" aria-selected="false" aria-controls="view-generator">MCQ Generator</button>
             <button type="button" id="tab-admin" class="tab-btn is-hidden" role="tab" aria-selected="false" aria-controls="view-admin">Admin Portal</button>
@@ -132,16 +140,17 @@
 
           <div class="field">
             <label for="model">Gemini Model</label>
-            <input
-              type="text"
+            <select
               id="model"
               name="model"
               class="mono-input"
-              value="gemini-3.6-flash"
-              spellcheck="false"
-              autocomplete="off"
               required
             >
+              <option value="gemini-3.6-flash" selected>gemini-3.6-flash</option>
+              <option value="gemini-3.5-flash">gemini-3.5-flash</option>
+              <option value="gemini-3.5-flash-lite">gemini-3.5-flash-lite</option>
+              <option value="gemini-3.1-flash-lite">gemini-3.1-flash-lite</option>
+            </select>
           </div>
 
           <div class="field">
@@ -245,6 +254,72 @@
         </form>
       </section>
 
+      <!-- DOCX Translate View -->
+      <section id="view-docx" class="view-panel is-hidden" role="tabpanel">
+        <form id="docx-form" novalidate>
+          <div class="field">
+            <div class="label-row">
+              <label for="docx-api-key">Gemini API Key</label>
+              <span class="sub-label">Optional (Custom key if default limit exceeded)</span>
+            </div>
+            <input
+              type="password"
+              id="docx-api-key"
+              name="docx-api-key"
+              class="mono-input"
+              autocomplete="off"
+              placeholder="default model එකේ limit පැනලනන් API key එකක් හදල මෙතෙන්ට දාන්න"
+            >
+            <div class="key-usage-card" id="docx-key-usage-card">
+              <div class="key-usage-top">
+                <div class="key-usage-left">
+                  <span class="key-usage-badge default-key" id="docx-key-badge">Default Server Key</span>
+                  <span class="key-usage-title" title="Tracked via this application. Google Gemini API does not expose a public API endpoint to query global usage across other external apps.">App Usage Today (RPD)</span>
+                </div>
+                <div class="key-usage-right">
+                  <span class="key-usage-count" id="docx-key-count">0 / 1,500 reqs</span>
+                </div>
+              </div>
+              <div class="key-usage-bar-bg">
+                <div class="key-usage-bar-fill normal" id="docx-key-fill" style="width: 0%;"></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="field">
+            <div class="label-row">
+              <label for="docx-file-input">Select Word Document (.docx)</label>
+              <span class="sub-label">Upload a .docx file to translate paragraph by paragraph</span>
+            </div>
+            <div id="docx-drop-zone" class="docx-drop-zone">
+              <input type="file" id="docx-file-input" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" style="display: none;" />
+              <div class="drop-zone-content" id="docx-drop-content">
+                <div class="drop-zone-icon">📄</div>
+                <div class="drop-zone-title">Click or drag & drop your Word (.docx) file here</div>
+                <div class="drop-zone-sub">Every paragraph will be translated and inserted directly below in 4u-Chami. font</div>
+                <button type="button" id="docx-browse-btn" class="btn-sm" style="margin-top: 12px; color: #ffffff !important;">Browse File</button>
+              </div>
+              <div class="file-info-box is-hidden" id="docx-file-info" style="display: none;">
+                <span class="file-icon">📝</span>
+                <div class="file-details">
+                  <span class="file-name" id="docx-file-name">Document.docx</span>
+                  <span class="file-size" id="docx-file-size">0 KB</span>
+                </div>
+                <button type="button" id="docx-remove-btn" class="btn-sm btn-logout" style="padding: 4px 10px;">Remove</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="actions">
+            <button type="submit" id="docx-translate-btn" class="generate-btn" disabled>
+              <span class="btn-text">Translate DOCX Document</span>
+            </button>
+          </div>
+
+          <p id="docx-status" class="status" role="status" aria-live="polite"></p>
+        </form>
+      </section>
+
       <!-- Glossary / Public Vocabulary View -->
       <section id="view-glossary" class="view-panel is-hidden" role="tabpanel">
         <div class="glossary-container">
@@ -305,6 +380,7 @@
           <div class="admin-subtabs">
             <button type="button" id="admin-subtab-users" class="subtab-btn is-active">Users & Prompts</button>
             <button type="button" id="admin-subtab-vocab" class="subtab-btn">Vocabulary Mappings</button>
+            <button type="button" id="admin-subtab-models" class="subtab-btn">Gemini Models</button>
           </div>
 
           <!-- Admin Section 1: Registered Users & User Prompts -->
@@ -437,6 +513,35 @@
                 </div>
               </form>
               <p id="admin-key-usage-status" class="status" role="status" aria-live="polite" style="margin-top: 8px;"></p>
+            </div>
+          </div>
+
+          <!-- Admin Section 3: Gemini Models Management -->
+          <div id="admin-sec-models" class="admin-section is-hidden">
+            <form id="admin-add-model-form" class="vocab-add-form" style="margin-bottom: 20px;">
+              <div class="section-heading">Add Allowed Gemini Model</div>
+              <div class="vocab-input-group" style="display: flex; gap: 12px; align-items: flex-end;">
+                <div class="field" style="flex: 1; margin-bottom: 0;">
+                  <label for="admin-model-name">Model Identifier</label>
+                  <input type="text" id="admin-model-name" class="text-input" placeholder="e.g. gemini-3.6-flash" required autocomplete="off">
+                </div>
+                <button type="submit" id="admin-add-model-btn" class="generate-btn vocab-submit-btn" style="height: 38px;">Add Model</button>
+              </div>
+            </form>
+
+            <p id="admin-model-status" class="status" role="status" aria-live="polite"></p>
+
+            <div class="vocab-section" style="margin-top: 16px;">
+              <div class="section-heading">Allowed Gemini Models in App</div>
+              <div class="vocab-list-wrapper">
+                <div class="vocab-header admin-header">
+                  <span>Model Identifier</span>
+                  <span class="text-right">Action</span>
+                </div>
+                <div id="admin-models-list" class="vocab-list">
+                  <!-- Dynamically populated -->
+                </div>
+              </div>
             </div>
           </div>
 

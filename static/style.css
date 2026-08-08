@@ -259,6 +259,7 @@ body {
 
 .nav-tabs {
   display: flex;
+  align-items: center;
   background: var(--panel-raised);
   padding: 3px;
   border-radius: var(--radius-sm);
@@ -276,6 +277,28 @@ body {
   border-radius: 6px;
   cursor: pointer;
   transition: color 0.15s ease, background 0.15s ease;
+}
+
+.tab-btn-stacked {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 3px 12px;
+  line-height: 1.15;
+}
+
+.tab-title {
+  font-size: 12.5px;
+  line-height: 1.1;
+}
+
+.tab-beta {
+  font-size: 11px;
+  font-weight: 600;
+  opacity: 0.85;
+  margin-top: 1px;
+  line-height: 1;
 }
 
 .tab-btn:hover {
@@ -1291,4 +1314,79 @@ input:focus,
 .key-usage-bar-fill.danger {
   background: #ef4444;
 }
+
+/* DOCX Translate Drop Zone & File Info */
+.docx-drop-zone {
+  border: 2px dashed var(--border-soft);
+  border-radius: var(--radius-md);
+  padding: 28px 20px;
+  text-align: center;
+  background: var(--surface);
+  transition: border-color 0.2s ease, background-color 0.2s ease, box-shadow 0.2s ease;
+  cursor: pointer;
+  margin-top: 6px;
+}
+
+.docx-drop-zone:hover,
+.docx-drop-zone.is-dragover {
+  border-color: #dd390b;
+  background: rgba(221, 57, 11, 0.05);
+}
+
+.drop-zone-icon {
+  font-size: 36px;
+  margin-bottom: 8px;
+}
+
+.drop-zone-title {
+  font-weight: 600;
+  color: var(--text);
+  font-size: 15px;
+}
+
+.drop-zone-sub {
+  font-size: 13px;
+  color: var(--text-dim);
+  margin-top: 4px;
+  line-height: 1.4;
+}
+
+.is-hidden {
+  display: none !important;
+}
+
+.file-info-box {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: var(--panel);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  padding: 12px 16px;
+  text-align: left;
+}
+
+.file-info-box .file-icon {
+  font-size: 26px;
+}
+
+.file-info-box .file-details {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+.file-info-box .file-name {
+  font-weight: 600;
+  color: var(--text);
+  font-size: 14px;
+  word-break: break-all;
+}
+
+.file-info-box .file-size {
+  font-size: 12px;
+  color: var(--text-dim);
+  margin-top: 2px;
+}
+
 

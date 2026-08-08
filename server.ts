@@ -6,6 +6,7 @@ import cookieParser from "cookie-parser";
 import { GoogleGenAI } from "@google/genai";
 import JSZip from "jszip";
 import { DOMParser, XMLSerializer } from "@xmldom/xmldom";
+import multer from "multer";
 import dotenv from "dotenv";
 import { sql } from "@vercel/postgres";
 import { ConvertToLegacy } from "./src/UnicodeToLegacy.js";
@@ -59,6 +60,7 @@ const TMP_SESSIONS_PATH = path.join("/tmp", "sessions.json");
 const TMP_PROMPT_HISTORY_PATH = path.join("/tmp", "prompt_history.json");
 const TMP_TRANSLATION_HISTORY_PATH = path.join("/tmp", "translation_history.json");
 const TMP_API_KEY_USAGE_PATH = path.join("/tmp", "api_key_usage.json");
+const TMP_MODELS_PATH = path.join("/tmp", "models.json");
 
 const KV_URL = process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL;
 const KV_TOKEN = process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN;
@@ -138,6 +140,12 @@ async function ensurePgTables(): Promise<boolean> {
         PRIMARY KEY (usage_date, key_id)
       );
     `;
+    await sql`
+      CREATE TABLE IF NOT EXISTS gemini_models (
+        name VARCHAR(100) PRIMARY KEY,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `;
     pgInitAttempted = true;
     return true;
   } catch (err) {
@@ -152,6 +160,7 @@ let memorySessions: Record<string, any> = {};
 let memoryPromptHistory: Array<any> = [];
 let memoryTranslationHistory: Array<any> = [];
 let memoryApiKeyUsage: Record<string, number> = {};
+let memoryModels: string[] = ["gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite"];
 
 async function loadFallbackData() {
   try {
@@ -173,6 +182,13 @@ async function loadFallbackData() {
   try {
     const kData = await fs.promises.readFile(TMP_API_KEY_USAGE_PATH, "utf-8");
     memoryApiKeyUsage = JSON.parse(kData);
+  } catch {}
+  try {
+    const mData = await fs.promises.readFile(TMP_MODELS_PATH, "utf-8");
+    const parsed = JSON.parse(mData);
+    if (Array.isArray(parsed) && parsed.length > 0) {
+      memoryModels = parsed;
+    }
   } catch {}
 }
 loadFallbackData();
@@ -201,6 +217,80 @@ async function saveFallbackApiKeyUsage() {
   try {
     await fs.promises.writeFile(TMP_API_KEY_USAGE_PATH, JSON.stringify(memoryApiKeyUsage, null, 2));
   } catch {}
+}
+async function saveFallbackModels() {
+  try {
+    await fs.promises.writeFile(TMP_MODELS_PATH, JSON.stringify(memoryModels, null, 2));
+  } catch {}
+}
+
+async function getAdminModels(): Promise<string[]> {
+  if (isPostgresConfigured()) {
+    try {
+      await ensurePgTables();
+      const { rows } = await sql`SELECT name FROM gemini_models ORDER BY created_at ASC;`;
+      if (rows && rows.length > 0) {
+        return rows.map((r: any) => r.name);
+      } else {
+        const defaults = ["gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite"];
+        for (const m of defaults) {
+          await sql`INSERT INTO gemini_models (name) VALUES (${m}) ON CONFLICT DO NOTHING;`;
+        }
+        return defaults;
+      }
+    } catch (err) {
+      console.error("Error fetching models from Postgres:", err);
+    }
+  }
+
+  if (!memoryModels || memoryModels.length === 0) {
+    memoryModels = ["gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite"];
+    await saveFallbackModels();
+  }
+  return memoryModels;
+}
+
+async function addAdminModel(modelName: string): Promise<string[]> {
+  const clean = modelName.trim();
+  if (!clean) throw new Error("Model name cannot be empty.");
+
+  if (isPostgresConfigured()) {
+    try {
+      await ensurePgTables();
+      await sql`INSERT INTO gemini_models (name) VALUES (${clean}) ON CONFLICT DO NOTHING;`;
+    } catch (err) {
+      console.error("Error adding model to Postgres:", err);
+    }
+  }
+
+  if (!memoryModels.includes(clean)) {
+    memoryModels.push(clean);
+    await saveFallbackModels();
+  }
+
+  return await getAdminModels();
+}
+
+async function deleteAdminModel(modelName: string): Promise<string[]> {
+  const clean = modelName.trim();
+  const currentModels = await getAdminModels();
+  if (currentModels.length <= 1) {
+    throw new Error("Cannot delete the last remaining model. At least one model must be available.");
+  }
+
+  if (isPostgresConfigured()) {
+    try {
+      await ensurePgTables();
+      await sql`DELETE FROM gemini_models WHERE name = ${clean};`;
+    } catch (err) {
+      console.error("Error deleting model from Postgres:", err);
+    }
+  }
+
+  memoryModels = memoryModels.filter((m) => m !== clean);
+  await saveFallbackModels();
+
+  return await getAdminModels();
 }
 
 interface User {
@@ -1947,10 +2037,64 @@ app.get("/api/admin/translations", async (req: Request, res: Response) => {
   }
 });
 
+// Admin: Get allowed Gemini models
+app.get("/api/models", async (req: Request, res: Response) => {
+  try {
+    const models = await getAdminModels();
+    return res.json({ models });
+  } catch (err) {
+    return res.status(500).json({ error: "Failed to fetch models." });
+  }
+});
+
+// Admin: Add new Gemini model
+app.post("/api/admin/models", async (req: Request, res: Response) => {
+  try {
+    const user = await getCurrentUser(req);
+    if (!isUserAdminAccount(user, req)) {
+      return res.status(403).json({ error: "Admin authentication required." });
+    }
+
+    const { model } = req.body || {};
+    if (!model || typeof model !== "string" || !model.trim()) {
+      return res.status(400).json({ error: "Model name is required." });
+    }
+
+    const updated = await addAdminModel(model.trim());
+    return res.json({ success: true, models: updated });
+  } catch (err: any) {
+    return res.status(400).json({ error: err?.message || "Failed to add model." });
+  }
+});
+
+// Admin: Delete Gemini model
+app.delete("/api/admin/models", async (req: Request, res: Response) => {
+  try {
+    const user = await getCurrentUser(req);
+    if (!isUserAdminAccount(user, req)) {
+      return res.status(403).json({ error: "Admin authentication required." });
+    }
+
+    const { model } = req.body || {};
+    if (!model || typeof model !== "string" || !model.trim()) {
+      return res.status(400).json({ error: "Model name is required." });
+    }
+
+    const updated = await deleteAdminModel(model.trim());
+    return res.json({ success: true, models: updated });
+  } catch (err: any) {
+    return res.status(400).json({ error: err?.message || "Failed to delete model." });
+  }
+});
+
 app.post("/api/translate", async (req: Request, res: Response) => {
   const payload = req.body || {};
   const text = (payload.text || "").trim();
-  const model = (payload.model || "gemini-3.6-flash").trim();
+  const allowedModels = await getAdminModels();
+  let model = (payload.model || "").trim();
+  if (!model || !allowedModels.includes(model)) {
+    model = allowedModels[0] || "gemini-3.6-flash";
+  }
 
   if (!text) {
     return res.status(400).json({ error: "Please enter text to translate." });
@@ -1977,11 +2121,44 @@ app.post("/api/translate", async (req: Request, res: Response) => {
   }
 
   const userApiKey = (payload.apiKey || req.headers["x-api-key"] || "").toString().trim();
+
+  try {
+    const { unicodeText, legacyText } = await performTranslation(text, userApiKey, model);
+
+    // Record translation usage stats
+    try {
+      await recordTranslation({
+        userId: user?.id,
+        userEmail: user?.email,
+        userName: user?.name,
+        isGuest: !user,
+        guestIdentifier: guestId,
+      });
+    } catch (err) {
+      console.error("Failed to record translation usage:", err);
+    }
+
+    let keyUsage: any = null;
+    try {
+      keyUsage = await incrementApiKeyUsage(userApiKey);
+    } catch (err) {
+      console.error("Failed to increment API key usage:", err);
+    }
+
+    return res.json({ translation: legacyText, unicode: unicodeText, guest_id: guestId, keyUsage });
+  } catch (exc: any) {
+    return res.status(502).json({ error: `The Gemini API request failed: ${exc?.message || exc}` });
+  }
+});
+
+async function performTranslation(
+  text: string,
+  userApiKey?: string,
+  model = "gemini-3.6-flash"
+): Promise<{ unicodeText: string; legacyText: string }> {
   const apiKey = userApiKey || process.env.GEMINI_API_KEY_TRANSLATE || process.env.GEMINI_API_KEY;
   if (!apiKey) {
-    return res.status(500).json({
-      error: "The server is missing its Gemini API configuration. Please enter a custom Gemini API key.",
-    });
+    throw new Error("The server is missing its Gemini API configuration. Please enter a custom Gemini API key.");
   }
 
   let vocabListText = "";
@@ -2027,69 +2204,448 @@ Overall Tone:
 Text to translate:
 ${text}`;
 
+  const ai = new GoogleGenAI({ apiKey });
+
+  const validModels = await getAdminModels();
+  const modelsToTry: string[] = [];
+
+  if (model && validModels.includes(model)) {
+    modelsToTry.push(model);
+  }
+  for (const m of validModels) {
+    if (!modelsToTry.includes(m)) {
+      modelsToTry.push(m);
+    }
+  }
+
+  let unicodeTranslation = "";
+  let lastError: any = null;
+
+  for (const m of modelsToTry) {
+    try {
+      const response = await ai.models.generateContent({
+        model: m,
+        contents: translatorSystemPrompt,
+      });
+      unicodeTranslation = (response.text || "").trim();
+      if (unicodeTranslation) {
+        lastError = null;
+        break;
+      }
+    } catch (err: any) {
+      lastError = err;
+      const msg = err?.message || String(err);
+      console.warn(`Translation failed with model ${m} using ${userApiKey ? "custom" : "default"} API key:`, msg);
+
+      if (msg.includes("429") || msg.includes("RESOURCE_EXHAUSTED")) {
+        await new Promise((r) => setTimeout(r, 1000));
+      }
+    }
+  }
+
+  if (lastError && !unicodeTranslation) {
+    throw new Error(`Gemini translation request failed: ${lastError?.message || lastError}`);
+  }
+
+  const legacyText = ConvertToLegacy(unicodeTranslation);
+  return { unicodeText: unicodeTranslation, legacyText };
+}
+
+async function translateWithRetry(
+  text: string,
+  userApiKey?: string,
+  maxRetries = 3
+): Promise<{ unicodeText: string; legacyText: string }> {
+  let lastErr: any = null;
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      const res = await performTranslation(text, userApiKey);
+      if (res && (res.legacyText || res.unicodeText)) {
+        return res;
+      }
+    } catch (err: any) {
+      lastErr = err;
+      const msg = err?.message || String(err);
+      if (msg.includes("429") || msg.includes("RESOURCE_EXHAUSTED")) {
+        await new Promise((r) => setTimeout(r, attempt * 1500));
+      } else {
+        await new Promise((r) => setTimeout(r, attempt * 400));
+      }
+    }
+  }
+  console.warn("Translation fallback for text:", text);
+  const fallbackLegacy = ConvertToLegacy(text);
+  return { unicodeText: text, legacyText: fallbackLegacy };
+}
+
+async function batchTranslateTexts(
+  texts: string[],
+  userApiKey?: string
+): Promise<{ unicodeText: string; legacyText: string }[]> {
+  if (texts.length === 0) return [];
+  if (texts.length === 1) {
+    const res = await translateWithRetry(texts[0], userApiKey);
+    return [res];
+  }
+
+  let vocabListText = "";
   try {
-    const ai = new GoogleGenAI({ apiKey });
+    const promptContent = await getPromptContent();
+    const vocab = parseVocabulary(promptContent);
+    vocabListText = vocab.map((v) => `'${v.english}' as '${v.sinhala}'`).join(",\n");
+  } catch {}
 
-    // Build model list: if user provided a custom key, include public model aliases
-    const modelsToTry: string[] = [];
-    if (userApiKey) {
-      if (model && model !== "gemini-3.6-flash") {
-        modelsToTry.push(model);
+  const itemsFormatted = texts.map((t, idx) => `[ITEM ${idx + 1}]\n${t}`).join("\n\n");
+
+  const prompt = `Translate each of the following items from English into Sinhala.
+Translate accurately into Sinhala (Unicode).
+Output ONLY the items in this exact marker format:
+[ITEM 1]
+<Sinhala translation for item 1>
+
+[ITEM 2]
+<Sinhala translation for item 2>
+
+Do not add extra notes or conversational text. Preserve the [ITEM 1], [ITEM 2] markers.
+
+Mandatory Vocabulary Mapping:
+${vocabListText}
+
+Items to translate:
+${itemsFormatted}`;
+
+  try {
+    const { unicodeText } = await performTranslation(prompt, userApiKey);
+    const itemRegex = /\[ITEM\s+(\d+)\]\s*([\s\S]*?)(?=\[ITEM\s+\d+\]|$)/gi;
+    const parsedMap = new Map<number, string>();
+    let match;
+    while ((match = itemRegex.exec(unicodeText)) !== null) {
+      const idx = parseInt(match[1], 10) - 1;
+      const translated = match[2].trim();
+      if (idx >= 0 && idx < texts.length) {
+        parsedMap.set(idx, translated);
       }
-      modelsToTry.push("gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash", "gemini-3.6-flash");
-    } else {
-      modelsToTry.push(model || "gemini-3.6-flash", "gemini-2.5-flash", "gemini-2.0-flash");
     }
 
-    let unicodeTranslation = "";
-    let lastError: any = null;
+    const results: { unicodeText: string; legacyText: string }[] = [];
+    for (let i = 0; i < texts.length; i++) {
+      const trans = parsedMap.get(i);
+      if (trans && trans.length > 0) {
+        results.push({ unicodeText: trans, legacyText: ConvertToLegacy(trans) });
+      } else {
+        const single = await translateWithRetry(texts[i], userApiKey);
+        results.push(single);
+      }
+    }
+    return results;
+  } catch (err) {
+    console.warn("Batch translation request failed, processing individually:", err);
+    const results: { unicodeText: string; legacyText: string }[] = [];
+    for (const txt of texts) {
+      const res = await translateWithRetry(txt, userApiKey);
+      results.push(res);
+      await new Promise((r) => setTimeout(r, 200));
+    }
+    return results;
+  }
+}
 
-    for (const m of modelsToTry) {
-      try {
-        const response = await ai.models.generateContent({
-          model: m,
-          contents: translatorSystemPrompt,
-        });
-        unicodeTranslation = (response.text || "").trim();
-        if (unicodeTranslation) {
-          lastError = null;
-          break;
+function getParagraphRawText(pNode: Element): string {
+  let text = "";
+  function walk(node: Node) {
+    if (node.nodeType === 1) {
+      const el = node as Element;
+      const tag = (el.tagName || el.nodeName || "").toLowerCase();
+      if (tag === "w:t" || tag === "t" || tag.endsWith(":t")) {
+        text += el.textContent || "";
+      } else if (
+        tag === "w:br" ||
+        tag === "br" ||
+        tag.endsWith(":br") ||
+        tag === "w:cr" ||
+        tag === "cr" ||
+        tag.endsWith(":cr")
+      ) {
+        text += "\n";
+      } else if (tag === "w:tab" || tag === "tab" || tag.endsWith(":tab")) {
+        text += " ";
+      } else if (tag === "w:nobreakhyphen") {
+        text += "-";
+      } else {
+        for (let i = 0; i < el.childNodes.length; i++) {
+          walk(el.childNodes[i]);
         }
-      } catch (err: any) {
-        lastError = err;
-        console.warn(`Translation failed with model ${m} using ${userApiKey ? "custom" : "default"} API key:`, err?.message || err);
+      }
+    }
+  }
+  walk(pNode);
+  return text;
+}
+
+function isInsideTableScope(pNode: Element): boolean {
+  let curr: Node | null = pNode.parentNode;
+  while (curr) {
+    if (curr.nodeType === 1) {
+      const tag = ((curr as Element).tagName || (curr as Element).nodeName || "").toLowerCase();
+      if (tag === "w:tc" || tag === "tc" || tag.endsWith(":tc")) {
+        return true;
+      }
+    }
+    curr = curr.parentNode;
+  }
+  return false;
+}
+
+function insertAfter(parent: Node, newElem: Node, target: Node): Node {
+  const next = target.nextSibling;
+  if (next) {
+    parent.insertBefore(newElem, next);
+  } else {
+    parent.appendChild(newElem);
+  }
+  return newElem;
+}
+
+function createTextParagraph(
+  doc: Document,
+  text: string,
+  origPPr?: Element | null
+): Element {
+  const p = doc.createElement("w:p");
+  if (origPPr) {
+    p.appendChild(origPPr.cloneNode(true));
+  }
+  const run = doc.createElement("w:r");
+  const tNode = doc.createElement("w:t");
+  tNode.setAttribute("xml:space", "preserve");
+  tNode.appendChild(doc.createTextNode(text));
+  run.appendChild(tNode);
+  p.appendChild(run);
+  return p;
+}
+
+function createTranslatedParagraph(
+  doc: Document,
+  legacyText: string,
+  origPPr?: Element | null
+): Element {
+  const p = doc.createElement("w:p");
+  if (origPPr) {
+    p.appendChild(origPPr.cloneNode(true));
+  }
+  const run = doc.createElement("w:r");
+  const rPr = doc.createElement("w:rPr");
+
+  const rFonts = doc.createElement("w:rFonts");
+  rFonts.setAttribute("w:ascii", "4u-Chami.");
+  rFonts.setAttribute("w:hAnsi", "4u-Chami.");
+  rFonts.setAttribute("w:cs", "4u-Chami.");
+  rFonts.setAttribute("w:eastAsia", "4u-Chami.");
+  rPr.appendChild(rFonts);
+
+  run.appendChild(rPr);
+
+  const lines = legacyText.split("\n");
+  for (let l = 0; l < lines.length; l++) {
+    if (l > 0) {
+      run.appendChild(doc.createElement("w:br"));
+    }
+    const tNode = doc.createElement("w:t");
+    tNode.setAttribute("xml:space", "preserve");
+    tNode.appendChild(doc.createTextNode(lines[l]));
+    run.appendChild(tNode);
+  }
+
+  p.appendChild(run);
+  return p;
+}
+
+const docxUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 25 * 1024 * 1024 },
+});
+
+app.post("/api/translate-docx", docxUpload.single("file"), async (req: Request, res: Response) => {
+  try {
+    if (!req.file || !req.file.buffer) {
+      return res.status(400).json({ error: "Please select a valid .docx file to translate." });
+    }
+
+    const userApiKey = (req.body.apiKey || req.headers["x-api-key"] || "").toString().trim();
+    const apiKey = userApiKey || process.env.GEMINI_API_KEY_TRANSLATE || process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+      return res.status(400).json({
+        error: "The server is missing its Gemini API configuration. Please enter a custom Gemini API key.",
+      });
+    }
+
+    let zip: JSZip;
+    try {
+      zip = await JSZip.loadAsync(req.file.buffer);
+    } catch (err) {
+      return res.status(400).json({ error: "Failed to parse the uploaded file as a valid .docx document." });
+    }
+
+    const docFile = zip.file("word/document.xml");
+    if (!docFile) {
+      return res.status(400).json({ error: "Could not locate word/document.xml inside the .docx file." });
+    }
+
+    const xmlContent = await docFile.async("text");
+    const doc = new DOMParser().parseFromString(xmlContent, "text/xml");
+
+    // Gather ALL paragraph elements in document order across the entire XML tree (including table cells w:tc)
+    const allElements = Array.from(doc.getElementsByTagName("*"));
+    const allParagraphs: Element[] = [];
+    for (const el of allElements) {
+      const tag = (el.tagName || el.nodeName || "").toLowerCase();
+      if (tag === "w:p" || tag === "p" || tag.endsWith(":p")) {
+        allParagraphs.push(el);
       }
     }
 
-    if (lastError && !unicodeTranslation) {
-      return res.status(502).json({ error: `The Gemini API request failed: ${lastError?.message || lastError}` });
+    // Work items map text segments (between line breaks) to their parent paragraph
+    const workItems: { pNode: Element; lineIndex: number; totalLines: number; text: string; legacyTranslation?: string }[] = [];
+    const pNodeLinesMap = new Map<Element, string[]>();
+
+    for (const p of allParagraphs) {
+      const rawText = getParagraphRawText(p);
+      const lines = rawText
+        .split(/\r?\n/)
+        .map((s) => s.trim())
+        .filter((s) => s.length > 0);
+
+      if (lines.length > 0) {
+        pNodeLinesMap.set(p, lines);
+        lines.forEach((lineText, idx) => {
+          workItems.push({
+            pNode: p,
+            lineIndex: idx,
+            totalLines: lines.length,
+            text: lineText,
+          });
+        });
+      }
     }
 
-    const legacyTranslation = ConvertToLegacy(unicodeTranslation);
+    if (workItems.length === 0) {
+      return res.status(400).json({ error: "No text paragraphs or table cell lines found in the uploaded document." });
+    }
 
-    // Record translation usage stats
+    // Translate workItems in batches using batchTranslateTexts to minimize API calls and prevent rate limits
+    const BATCH_SIZE = 10;
+    for (let i = 0; i < workItems.length; i += BATCH_SIZE) {
+      const batch = workItems.slice(i, i + BATCH_SIZE);
+      const texts = batch.map((item) => item.text);
+      try {
+        const translations = await batchTranslateTexts(texts, userApiKey);
+        for (let k = 0; k < batch.length; k++) {
+          batch[k].legacyTranslation = translations[k]?.legacyText || ConvertToLegacy(batch[k].text);
+        }
+      } catch (err) {
+        console.error("Batch error in DOCX translation:", err);
+        for (const item of batch) {
+          item.legacyTranslation = ConvertToLegacy(item.text);
+        }
+      }
+      if (i + BATCH_SIZE < workItems.length) {
+        await new Promise((r) => setTimeout(r, 200));
+      }
+    }
+
+    // Map translations back to each pNode
+    const pNodeTranslationsMap = new Map<Element, string[]>();
+    for (const item of workItems) {
+      let arr = pNodeTranslationsMap.get(item.pNode);
+      if (!arr) {
+        arr = [];
+        pNodeTranslationsMap.set(item.pNode, arr);
+      }
+      arr[item.lineIndex] = item.legacyTranslation || ConvertToLegacy(item.text);
+    }
+
+    // Insert translations directly below lines/paragraphs inside parent container (body, table cell w:tc, etc.)
+    for (const [pNode, lines] of pNodeLinesMap.entries()) {
+      const parent = pNode.parentNode;
+      if (!parent) continue;
+
+      const inTable = isInsideTableScope(pNode);
+      const translations = pNodeTranslationsMap.get(pNode) || [];
+      const origPPr = pNode.getElementsByTagName("w:pPr")[0] || pNode.getElementsByTagName("pPr")[0];
+
+      if (lines.length === 1) {
+        // Single line paragraph
+        const transText = translations[0] || ConvertToLegacy(lines[0]);
+        const transP = createTranslatedParagraph(doc, transText, origPPr);
+
+        let last = insertAfter(parent, transP, pNode);
+        if (!inTable) {
+          const emptyP = doc.createElement("w:p");
+          insertAfter(parent, emptyP, last);
+        }
+      } else {
+        // Multi-line paragraph (separated by soft line breaks <w:br/>)
+        // Replace pNode with individual paragraphs for each line + translation pair
+        let lastInserted: Node = pNode;
+
+        for (let i = 0; i < lines.length; i++) {
+          const lineText = lines[i];
+          const transText = translations[i] || ConvertToLegacy(lineText);
+
+          const origLineP = createTextParagraph(doc, lineText, origPPr);
+          const transP = createTranslatedParagraph(doc, transText, origPPr);
+
+          lastInserted = insertAfter(parent, origLineP, lastInserted);
+          lastInserted = insertAfter(parent, transP, lastInserted);
+
+          if (!inTable) {
+            const emptyP = doc.createElement("w:p");
+            lastInserted = insertAfter(parent, emptyP, lastInserted);
+          }
+        }
+
+        // Remove the original multi-line paragraph node to prevent duplication
+        try {
+          parent.removeChild(pNode);
+        } catch (_) {}
+      }
+    }
+
+    const serializer = new XMLSerializer();
+    const newXml = serializer.serializeToString(doc);
+    zip.file("word/document.xml", newXml);
+
+    const outBuffer = await zip.generateAsync({ type: "nodebuffer" });
+
+    // Track usage
+    try {
+      await incrementApiKeyUsage(userApiKey);
+    } catch (_) {}
+
+    const user = await getCurrentUser(req);
     try {
       await recordTranslation({
         userId: user?.id,
         userEmail: user?.email,
         userName: user?.name,
         isGuest: !user,
-        guestIdentifier: guestId,
       });
-    } catch (err) {
-      console.error("Failed to record translation usage:", err);
-    }
+    } catch (_) {}
 
-    let keyUsage: any = null;
-    try {
-      keyUsage = await incrementApiKeyUsage(userApiKey);
-    } catch (err) {
-      console.error("Failed to increment API key usage:", err);
-    }
+    const originalFilename = req.file.originalname || "document.docx";
+    const baseName = originalFilename.replace(/\.docx$/i, "");
+    const outFilename = `${baseName}_translated.docx`;
 
-    return res.json({ translation: legacyTranslation, unicode: unicodeTranslation, guest_id: guestId, keyUsage });
-  } catch (exc: any) {
-    return res.status(502).json({ error: `The Gemini API request failed: ${exc?.message || exc}` });
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="${encodeURIComponent(outFilename)}"; filename*=${encodeURIComponent(outFilename)}`
+    );
+
+    return res.send(outBuffer);
+  } catch (err: any) {
+    console.error("Error in /api/translate-docx:", err);
+    return res.status(500).json({ error: `DOCX translation failed: ${err?.message || err}` });
   }
 });
 
@@ -2157,7 +2713,11 @@ app.post("/api/generate", async (req: Request, res: Response) => {
 
   const payload = req.body || {};
   const topic = (payload.topic || "").trim();
-  const model = (payload.model || "").trim();
+  const allowedModels = await getAdminModels();
+  let model = (payload.model || "").trim();
+  if (!model || !allowedModels.includes(model)) {
+    model = allowedModels[0] || "gemini-3.6-flash";
+  }
   const qtype = (payload.qtype || "normal").trim().toLowerCase();
   const userApiKey = (payload.apiKey || req.headers["x-api-key"] || "").toString().trim();
 
@@ -2165,7 +2725,10 @@ app.post("/api/generate", async (req: Request, res: Response) => {
     return res.status(400).json({ error: "Please enter a question topic." });
   }
   if (!model) {
-    return res.status(400).json({ error: "Please enter a Gemini model name." });
+    return res.status(400).json({ error: "Please select a Gemini model." });
+  }
+  if (!allowedModels.includes(model)) {
+    return res.status(400).json({ error: `Invalid model '${model}'. Allowed models: ${allowedModels.join(", ")}` });
   }
   if (!VALID_TYPES.has(qtype)) {
     return res.status(400).json({ error: `Unknown question type '${qtype}'.` });

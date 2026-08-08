@@ -4,6 +4,7 @@
   // Navigation Tabs & Hamburger Menu
   const tabGenerator = document.getElementById("tab-generator");
   const tabTranslator = document.getElementById("tab-translator");
+  const tabDocx = document.getElementById("tab-docx");
   const tabGlossary = document.getElementById("tab-glossary");
   const tabAdmin = document.getElementById("tab-admin");
 
@@ -11,11 +12,13 @@
   const hamburgerDropdown = document.getElementById("hamburger-dropdown");
   const menuItemGenerator = document.getElementById("menu-item-generator");
   const menuItemTranslator = document.getElementById("menu-item-translator");
+  const menuItemDocx = document.getElementById("menu-item-docx");
   const menuItemGlossary = document.getElementById("menu-item-glossary");
   const menuItemAdmin = document.getElementById("menu-item-admin");
 
   const viewGenerator = document.getElementById("view-generator");
   const viewTranslator = document.getElementById("view-translator");
+  const viewDocx = document.getElementById("view-docx");
   const viewGlossary = document.getElementById("view-glossary");
   const viewAdmin = document.getElementById("view-admin");
 
@@ -60,6 +63,7 @@
   // Translator Elements
   const translateForm = document.getElementById("translate-form");
   const translateApiKeyInput = document.getElementById("translate-api-key");
+  const docxApiKeyInput = document.getElementById("docx-api-key");
   const translateSourceInput = document.getElementById("translate-source");
   const translateBtn = document.getElementById("translate-btn");
   const translateStatusEl = document.getElementById("translate-status");
@@ -89,8 +93,10 @@
   // Admin Subtabs & Sections
   const adminSubtabUsers = document.getElementById("admin-subtab-users");
   const adminSubtabVocab = document.getElementById("admin-subtab-vocab");
+  const adminSubtabModels = document.getElementById("admin-subtab-models");
   const adminSecUsers = document.getElementById("admin-sec-users");
   const adminSecVocab = document.getElementById("admin-sec-vocab");
+  const adminSecModels = document.getElementById("admin-sec-models");
 
   const adminUsersList = document.getElementById("admin-users-list");
   const adminGuestsList = document.getElementById("admin-guests-list");
@@ -104,6 +110,11 @@
   const adminStatusEl = document.getElementById("admin-status");
   const pendingListEl = document.getElementById("pending-list");
   const adminActiveListEl = document.getElementById("admin-active-list");
+
+  const adminAddModelForm = document.getElementById("admin-add-model-form");
+  const adminModelNameInput = document.getElementById("admin-model-name");
+  const adminModelStatusEl = document.getElementById("admin-model-status");
+  const adminModelsListEl = document.getElementById("admin-models-list");
 
   let adminPromptsData = [];
   let adminTranslationStats = { users: [], guests: [], total: 0 };
@@ -127,6 +138,7 @@
 
   function getUserApiKey() {
     return (
+      (docxApiKeyInput ? docxApiKeyInput.value.trim() : "") ||
       (translateApiKeyInput ? translateApiKeyInput.value.trim() : "") ||
       (apiKeyInput ? apiKeyInput.value.trim() : "") ||
       localStorage.getItem(STORAGE_KEY_API) ||
@@ -151,6 +163,12 @@
         count: document.getElementById("generator-key-count"),
         remaining: document.getElementById("generator-key-remaining"),
         fill: document.getElementById("generator-key-fill"),
+      },
+      {
+        badge: document.getElementById("docx-key-badge"),
+        count: document.getElementById("docx-key-count"),
+        remaining: document.getElementById("docx-key-remaining"),
+        fill: document.getElementById("docx-key-fill"),
       },
     ];
 
@@ -217,6 +235,7 @@
     const savedKey = localStorage.getItem(STORAGE_KEY_API) || "";
     if (apiKeyInput) apiKeyInput.value = savedKey;
     if (translateApiKeyInput) translateApiKeyInput.value = savedKey;
+    if (docxApiKeyInput) docxApiKeyInput.value = savedKey;
 
     refreshKeyUsage(savedKey);
 
@@ -228,6 +247,7 @@
       }
       if (apiKeyInput && apiKeyInput.value !== val) apiKeyInput.value = val;
       if (translateApiKeyInput && translateApiKeyInput.value !== val) translateApiKeyInput.value = val;
+      if (docxApiKeyInput && docxApiKeyInput.value !== val) docxApiKeyInput.value = val;
 
       scheduleKeyUsageRefresh(val);
     };
@@ -246,6 +266,14 @@
       });
       translateApiKeyInput.addEventListener("change", () => {
         syncApiKey(translateApiKeyInput.value.trim());
+      });
+    }
+    if (docxApiKeyInput) {
+      docxApiKeyInput.addEventListener("input", () => {
+        syncApiKey(docxApiKeyInput.value.trim());
+      });
+      docxApiKeyInput.addEventListener("change", () => {
+        syncApiKey(docxApiKeyInput.value.trim());
       });
     }
 
@@ -645,6 +673,7 @@
 
   bindMenuItem(menuItemGenerator, "generator");
   bindMenuItem(menuItemTranslator, "translator");
+  bindMenuItem(menuItemDocx, "docx");
   bindMenuItem(menuItemGlossary, "glossary");
   bindMenuItem(menuItemAdmin, "admin");
 
@@ -685,17 +714,17 @@
   function switchTab(target) {
     const isAdmin = isUserAdmin();
 
-    [tabGenerator, tabTranslator, tabGlossary, tabAdmin].forEach((t) => {
+    [tabGenerator, tabTranslator, tabDocx, tabGlossary, tabAdmin].forEach((t) => {
       if (t) {
         t.classList.remove("is-active");
         t.setAttribute("aria-selected", "false");
       }
     });
-    [viewGenerator, viewTranslator, viewGlossary, viewAdmin].forEach((v) => {
+    [viewGenerator, viewTranslator, viewDocx, viewGlossary, viewAdmin].forEach((v) => {
       if (v) v.classList.add("is-hidden");
     });
 
-    [menuItemGenerator, menuItemTranslator, menuItemGlossary, menuItemAdmin].forEach((m) => {
+    [menuItemGenerator, menuItemTranslator, menuItemDocx, menuItemGlossary, menuItemAdmin].forEach((m) => {
       if (m) m.classList.remove("active");
     });
 
@@ -728,6 +757,13 @@
         }
         if (menuItemGenerator) menuItemGenerator.classList.add("active");
         if (viewGenerator) viewGenerator.classList.remove("is-hidden");
+      } else if (target === "docx") {
+        if (tabDocx) {
+          tabDocx.classList.add("is-active");
+          tabDocx.setAttribute("aria-selected", "true");
+        }
+        if (menuItemDocx) menuItemDocx.classList.add("active");
+        if (viewDocx) viewDocx.classList.remove("is-hidden");
       } else if (target === "glossary") {
         if (tabGlossary) {
           tabGlossary.classList.add("is-active");
@@ -750,6 +786,7 @@
 
   if (tabGenerator) tabGenerator.addEventListener("click", () => switchTab("generator"));
   if (tabTranslator) tabTranslator.addEventListener("click", () => switchTab("translator"));
+  if (tabDocx) tabDocx.addEventListener("click", () => switchTab("docx"));
   if (tabGlossary) tabGlossary.addEventListener("click", () => switchTab("glossary"));
   if (tabAdmin) tabAdmin.addEventListener("click", () => switchTab("admin"));
 
@@ -781,17 +818,32 @@
   if (adminSubtabUsers && adminSubtabVocab) {
     adminSubtabUsers.addEventListener("click", () => {
       adminSubtabUsers.classList.add("is-active");
-      adminSubtabVocab.classList.remove("is-active");
-      adminSecUsers.classList.remove("is-hidden");
-      adminSecVocab.classList.add("is-hidden");
+      if (adminSubtabVocab) adminSubtabVocab.classList.remove("is-active");
+      if (adminSubtabModels) adminSubtabModels.classList.remove("is-active");
+      if (adminSecUsers) adminSecUsers.classList.remove("is-hidden");
+      if (adminSecVocab) adminSecVocab.classList.add("is-hidden");
+      if (adminSecModels) adminSecModels.classList.add("is-hidden");
     });
 
     adminSubtabVocab.addEventListener("click", () => {
       adminSubtabVocab.classList.add("is-active");
-      adminSubtabUsers.classList.remove("is-active");
-      adminSecVocab.classList.remove("is-hidden");
-      adminSecUsers.classList.add("is-hidden");
+      if (adminSubtabUsers) adminSubtabUsers.classList.remove("is-active");
+      if (adminSubtabModels) adminSubtabModels.classList.remove("is-active");
+      if (adminSecVocab) adminSecVocab.classList.remove("is-hidden");
+      if (adminSecUsers) adminSecUsers.classList.add("is-hidden");
+      if (adminSecModels) adminSecModels.classList.add("is-hidden");
     });
+
+    if (adminSubtabModels) {
+      adminSubtabModels.addEventListener("click", () => {
+        adminSubtabModels.classList.add("is-active");
+        if (adminSubtabUsers) adminSubtabUsers.classList.remove("is-active");
+        if (adminSubtabVocab) adminSubtabVocab.classList.remove("is-active");
+        if (adminSecModels) adminSecModels.classList.remove("is-hidden");
+        if (adminSecUsers) adminSecUsers.classList.add("is-hidden");
+        if (adminSecVocab) adminSecVocab.classList.add("is-hidden");
+      });
+    }
   }
 
   // Generator Handler
@@ -1071,18 +1123,153 @@
     suggestForm.addEventListener("submit", handleSuggest);
   }
 
+  // Gemini Model Management
+  async function fetchModels() {
+    try {
+      const res = await fetch("/api/models");
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data && Array.isArray(data.models)) {
+        updateModelDropdowns(data.models);
+        renderAdminModels(data.models);
+      }
+    } catch (_) {}
+  }
+
+  function updateModelDropdowns(models) {
+    if (!modelInput) return;
+    const currentVal = modelInput.value;
+    modelInput.innerHTML = "";
+    if (!models || models.length === 0) {
+      const opt = document.createElement("option");
+      opt.value = "gemini-3.6-flash";
+      opt.textContent = "gemini-3.6-flash";
+      modelInput.appendChild(opt);
+      return;
+    }
+    models.forEach((m) => {
+      const opt = document.createElement("option");
+      opt.value = m;
+      opt.textContent = m;
+      if (m === currentVal) {
+        opt.selected = true;
+      }
+      modelInput.appendChild(opt);
+    });
+    if (!modelInput.value && models.length > 0) {
+      modelInput.value = models[0];
+    }
+  }
+
+  function renderAdminModels(models) {
+    if (!adminModelsListEl) return;
+    adminModelsListEl.innerHTML = "";
+    if (!models || models.length === 0) {
+      adminModelsListEl.innerHTML = `<div class="empty-vocab">No allowed Gemini models configured.</div>`;
+      return;
+    }
+
+    models.forEach((m) => {
+      const row = document.createElement("div");
+      row.className = "vocab-row admin-row";
+
+      const nameSpan = document.createElement("span");
+      nameSpan.className = "vocab-english";
+      nameSpan.style.fontWeight = "600";
+      nameSpan.textContent = m;
+
+      const actionsDiv = document.createElement("div");
+      actionsDiv.className = "action-btns";
+
+      const deleteBtn = document.createElement("button");
+      deleteBtn.className = "btn-sm btn-delete";
+      deleteBtn.textContent = "Delete";
+      deleteBtn.addEventListener("click", () => adminDeleteModel(m));
+
+      actionsDiv.appendChild(deleteBtn);
+      row.appendChild(nameSpan);
+      row.appendChild(actionsDiv);
+
+      adminModelsListEl.appendChild(row);
+    });
+  }
+
+  async function adminAddModel(event) {
+    if (event) event.preventDefault();
+    const modelName = adminModelNameInput ? adminModelNameInput.value.trim() : "";
+    if (!modelName) {
+      setStatus(adminModelStatusEl, "Please enter a model name.", "error");
+      return;
+    }
+
+    try {
+      setStatus(adminModelStatusEl, "Adding Gemini model…", "info");
+      const headers = getAuthHeaders();
+      headers["x-admin-pass"] = "ictfromabcadmin";
+
+      const res = await fetch("/api/admin/models", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ model: modelName }),
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || "Failed to add model.");
+      }
+
+      if (adminModelNameInput) adminModelNameInput.value = "";
+      renderAdminModels(data.models);
+      updateModelDropdowns(data.models);
+      setStatus(adminModelStatusEl, `Model "${escapeHtml(modelName)}" added successfully!`, "success");
+    } catch (err) {
+      setStatus(adminModelStatusEl, err.message || "Failed to add model.", "error");
+    }
+  }
+
+  async function adminDeleteModel(modelName) {
+    if (!modelName) return;
+    try {
+      setStatus(adminModelStatusEl, "Deleting Gemini model…", "info");
+      const headers = getAuthHeaders();
+      headers["x-admin-pass"] = "ictfromabcadmin";
+
+      const res = await fetch("/api/admin/models", {
+        method: "DELETE",
+        headers,
+        body: JSON.stringify({ model: modelName }),
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || "Failed to delete model.");
+      }
+
+      renderAdminModels(data.models);
+      updateModelDropdowns(data.models);
+      setStatus(adminModelStatusEl, `Model "${escapeHtml(modelName)}" removed successfully!`, "success");
+    } catch (err) {
+      setStatus(adminModelStatusEl, err.message || "Failed to delete model.", "error");
+    }
+  }
+
+  if (adminAddModelForm) {
+    adminAddModelForm.addEventListener("submit", adminAddModel);
+  }
+
   // Admin Data & Logic
   async function fetchAdminData() {
     try {
       const headers = getAuthHeaders();
       headers["x-admin-pass"] = "ictfromabcadmin";
 
-      const [pendingRes, activeRes, usersRes, promptsRes, transRes] = await Promise.all([
+      const [pendingRes, activeRes, usersRes, promptsRes, transRes, modelsRes] = await Promise.all([
         fetch("/api/admin/pending", { headers }),
         fetch("/api/vocabulary"),
         fetch("/api/admin/users", { headers }),
         fetch("/api/admin/prompts", { headers }),
         fetch("/api/admin/translations", { headers }),
+        fetch("/api/models"),
       ]);
 
       const pending = pendingRes.ok ? await pendingRes.json() : [];
@@ -1090,12 +1277,15 @@
       const users = usersRes.ok ? await usersRes.json() : [];
       adminPromptsData = promptsRes.ok ? await promptsRes.json() : [];
       adminTranslationStats = transRes.ok ? await transRes.json() : { users: [], guests: [], total: 0 };
+      const modelsData = modelsRes.ok ? await modelsRes.json() : { models: [] };
 
       renderAdminPending(pending);
       renderAdminActive(active);
       renderAdminUsers(users);
       renderAdminGuests();
       renderAdminPrompts();
+      renderAdminModels(modelsData.models || []);
+      updateModelDropdowns(modelsData.models || []);
     } catch (err) {
       setStatus(adminStatusEl, "Error loading admin data.", "error");
     }
@@ -1546,6 +1736,190 @@
     });
   }
 
+  // DOCX Translate Logic
+  const docxForm = document.getElementById("docx-form");
+  const docxFileInput = document.getElementById("docx-file-input");
+  const docxDropZone = document.getElementById("docx-drop-zone");
+  const docxBrowseBtn = document.getElementById("docx-browse-btn");
+  const docxDropContent = document.getElementById("docx-drop-content");
+  const docxFileInfo = document.getElementById("docx-file-info");
+  const docxFileName = document.getElementById("docx-file-name");
+  const docxFileSize = document.getElementById("docx-file-size");
+  const docxRemoveBtn = document.getElementById("docx-remove-btn");
+  const docxTranslateBtn = document.getElementById("docx-translate-btn");
+  const docxStatusEl = document.getElementById("docx-status");
+
+  let selectedDocxFile = null;
+
+  function formatBytes(bytes) {
+    if (bytes === 0) return "0 Bytes";
+    const k = 1024;
+    const sizes = ["Bytes", "KB", "MB", "GB"];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + " " + sizes[i];
+  }
+
+  function setSelectedDocx(file) {
+    if (!file) {
+      selectedDocxFile = null;
+      if (docxFileInput) docxFileInput.value = "";
+      if (docxFileInfo) {
+        docxFileInfo.classList.add("is-hidden");
+        docxFileInfo.style.display = "none";
+      }
+      if (docxDropContent) {
+        docxDropContent.classList.remove("is-hidden");
+        docxDropContent.style.display = "block";
+      }
+      if (docxTranslateBtn) docxTranslateBtn.disabled = true;
+      return;
+    }
+
+    if (!file.name.toLowerCase().endsWith(".docx")) {
+      setStatus(docxStatusEl, "Invalid file format. Please upload a .docx Word document.", "error");
+      return;
+    }
+
+    selectedDocxFile = file;
+    if (docxFileName) docxFileName.textContent = file.name;
+    if (docxFileSize) docxFileSize.textContent = formatBytes(file.size);
+    if (docxDropContent) {
+      docxDropContent.classList.add("is-hidden");
+      docxDropContent.style.display = "none";
+    }
+    if (docxFileInfo) {
+      docxFileInfo.classList.remove("is-hidden");
+      docxFileInfo.style.display = "flex";
+    }
+    if (docxTranslateBtn) docxTranslateBtn.disabled = false;
+    setStatus(docxStatusEl, "", "");
+  }
+
+  if (docxBrowseBtn) {
+    docxBrowseBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (docxFileInput) docxFileInput.click();
+    });
+  }
+
+  if (docxDropZone) {
+    docxDropZone.addEventListener("click", (e) => {
+      if (e.target !== docxRemoveBtn && !docxRemoveBtn?.contains(e.target) && !selectedDocxFile) {
+        if (docxFileInput) docxFileInput.click();
+      }
+    });
+
+    ["dragenter", "dragover"].forEach((eventName) => {
+      docxDropZone.addEventListener(eventName, (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        docxDropZone.classList.add("is-dragover");
+      });
+    });
+
+    ["dragleave", "drop"].forEach((eventName) => {
+      docxDropZone.addEventListener(eventName, (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        docxDropZone.classList.remove("is-dragover");
+      });
+    });
+
+    docxDropZone.addEventListener("drop", (e) => {
+      const dt = e.dataTransfer;
+      const files = dt ? dt.files : null;
+      if (files && files.length > 0) {
+        setSelectedDocx(files[0]);
+      }
+    });
+  }
+
+  if (docxFileInput) {
+    docxFileInput.addEventListener("change", (e) => {
+      if (e.target.files && e.target.files.length > 0) {
+        setSelectedDocx(e.target.files[0]);
+      }
+    });
+  }
+
+  if (docxRemoveBtn) {
+    docxRemoveBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      setSelectedDocx(null);
+    });
+  }
+
+  if (docxForm) {
+    docxForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      if (!selectedDocxFile) {
+        setStatus(docxStatusEl, "Please select a .docx file to translate.", "error");
+        return;
+      }
+
+      const apiKey = getUserApiKey();
+
+      try {
+        if (docxTranslateBtn) docxTranslateBtn.disabled = true;
+        setStatus(docxStatusEl, "Reading document and sending paragraphs to Gemini API...", "info");
+
+        const formData = new FormData();
+        formData.append("file", selectedDocxFile);
+        if (apiKey) formData.append("apiKey", apiKey);
+
+        const headers = getAuthHeaders();
+        // Delete Content-Type so fetch sets correct boundary for multipart/form-data
+        delete headers["Content-Type"];
+
+        const res = await fetch("/api/translate-docx", {
+          method: "POST",
+          headers,
+          body: formData,
+        });
+
+        if (!res.ok) {
+          let errMsg = "Failed to translate DOCX document.";
+          try {
+            const errJson = await res.json();
+            if (errJson.error) errMsg = errJson.error;
+          } catch (_) {}
+          throw new Error(errMsg);
+        }
+
+        const blob = await res.blob();
+        const disposition = res.headers.get("Content-Disposition") || "";
+        let filename = "Translated_Document.docx";
+        const match = disposition.match(/filename\*?=(?:UTF-8'')?([^;]+)/i);
+        if (match && match[1]) {
+          filename = decodeURIComponent(match[1].replace(/['"]/g, ""));
+        } else {
+          filename = selectedDocxFile.name.replace(/\.docx$/i, "") + "_translated.docx";
+        }
+
+        const downloadUrl = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = downloadUrl;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+
+        setTimeout(() => URL.revokeObjectURL(downloadUrl), 10000);
+
+        setStatus(
+          docxStatusEl,
+          `Translation completed successfully! Downloaded: ${escapeHtml(filename)}`,
+          "success"
+        );
+        refreshKeyUsage();
+      } catch (err) {
+        setStatus(docxStatusEl, err.message || "Failed to translate document.", "error");
+      } finally {
+        if (docxTranslateBtn && selectedDocxFile) docxTranslateBtn.disabled = false;
+      }
+    });
+  }
+
   function escapeHtml(str) {
     return String(str || "")
       .replace(/&/g, "&amp;")
@@ -1557,6 +1931,7 @@
 
   // Initialization
   initApiKey();
+  fetchModels();
   checkCurrentUserSession();
   checkAdminAccess();
 })();
