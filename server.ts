@@ -2406,16 +2406,54 @@ function insertAfter(parent: Node, newElem: Node, target: Node): Node {
   return newElem;
 }
 
+function checkBoldElement(el: Element): boolean {
+  const val = el.getAttribute("w:val") || el.getAttribute("val");
+  if (val === "0" || val === "false" || val === "off") {
+    return false;
+  }
+  return true;
+}
+
+function isParagraphBold(pNode: Element, origPPr?: Element | null): boolean {
+  const checkList = (container: Element) => {
+    const all = container.getElementsByTagName("*");
+    for (let i = 0; i < all.length; i++) {
+      const el = all[i];
+      const tag = (el.tagName || el.nodeName || "").toLowerCase();
+      if (tag === "w:b" || tag === "b" || tag.endsWith(":b") || tag === "w:bcs" || tag === "bcs" || tag.endsWith(":bcs")) {
+        if (checkBoldElement(el)) return true;
+      }
+    }
+    return false;
+  };
+
+  if (origPPr && checkList(origPPr)) {
+    return true;
+  }
+  if (checkList(pNode)) {
+    return true;
+  }
+
+  return false;
+}
+
 function createTextParagraph(
   doc: Document,
   text: string,
-  origPPr?: Element | null
+  origPPr?: Element | null,
+  isBold: boolean = false
 ): Element {
   const p = doc.createElement("w:p");
   if (origPPr) {
     p.appendChild(origPPr.cloneNode(true));
   }
   const run = doc.createElement("w:r");
+  if (isBold) {
+    const rPr = doc.createElement("w:rPr");
+    rPr.appendChild(doc.createElement("w:b"));
+    rPr.appendChild(doc.createElement("w:bCs"));
+    run.appendChild(rPr);
+  }
   const tNode = doc.createElement("w:t");
   tNode.setAttribute("xml:space", "preserve");
   tNode.appendChild(doc.createTextNode(text));
@@ -2427,7 +2465,9 @@ function createTextParagraph(
 function createTranslatedParagraph(
   doc: Document,
   legacyText: string,
-  origPPr?: Element | null
+  origPPr?: Element | null,
+  fontName: string = "4u-Chami.",
+  isBold: boolean = false
 ): Element {
   const p = doc.createElement("w:p");
   if (origPPr) {
@@ -2437,11 +2477,16 @@ function createTranslatedParagraph(
   const rPr = doc.createElement("w:rPr");
 
   const rFonts = doc.createElement("w:rFonts");
-  rFonts.setAttribute("w:ascii", "4u-Chami.");
-  rFonts.setAttribute("w:hAnsi", "4u-Chami.");
-  rFonts.setAttribute("w:cs", "4u-Chami.");
-  rFonts.setAttribute("w:eastAsia", "4u-Chami.");
+  rFonts.setAttribute("w:ascii", fontName);
+  rFonts.setAttribute("w:hAnsi", fontName);
+  rFonts.setAttribute("w:cs", fontName);
+  rFonts.setAttribute("w:eastAsia", fontName);
   rPr.appendChild(rFonts);
+
+  if (isBold) {
+    rPr.appendChild(doc.createElement("w:b"));
+    rPr.appendChild(doc.createElement("w:bCs"));
+  }
 
   run.appendChild(rPr);
 
@@ -2470,6 +2515,9 @@ app.post("/api/translate-docx", docxUpload.single("file"), async (req: Request, 
     if (!req.file || !req.file.buffer) {
       return res.status(400).json({ error: "Please select a valid .docx file to translate." });
     }
+
+    const docxType = (req.body.docxType || req.body.docType || "question").toString().toLowerCase();
+    const fontName = docxType === "tute" ? "FMMalithi" : "4u-Chami.";
 
     const userApiKey = (req.body.apiKey || req.headers["x-api-key"] || "").toString().trim();
     const apiKey = userApiKey || process.env.GEMINI_API_KEY_TRANSLATE || process.env.GEMINI_API_KEY;
@@ -2572,11 +2620,12 @@ app.post("/api/translate-docx", docxUpload.single("file"), async (req: Request, 
       const inTable = isInsideTableScope(pNode);
       const translations = pNodeTranslationsMap.get(pNode) || [];
       const origPPr = pNode.getElementsByTagName("w:pPr")[0] || pNode.getElementsByTagName("pPr")[0];
+      const isBold = isParagraphBold(pNode, origPPr);
 
       if (lines.length === 1) {
         // Single line paragraph
         const transText = translations[0] || ConvertToLegacy(lines[0]);
-        const transP = createTranslatedParagraph(doc, transText, origPPr);
+        const transP = createTranslatedParagraph(doc, transText, origPPr, fontName, isBold);
 
         let last = insertAfter(parent, transP, pNode);
         if (!inTable) {
@@ -2592,8 +2641,8 @@ app.post("/api/translate-docx", docxUpload.single("file"), async (req: Request, 
           const lineText = lines[i];
           const transText = translations[i] || ConvertToLegacy(lineText);
 
-          const origLineP = createTextParagraph(doc, lineText, origPPr);
-          const transP = createTranslatedParagraph(doc, transText, origPPr);
+          const origLineP = createTextParagraph(doc, lineText, origPPr, isBold);
+          const transP = createTranslatedParagraph(doc, transText, origPPr, fontName, isBold);
 
           lastInserted = insertAfter(parent, origLineP, lastInserted);
           lastInserted = insertAfter(parent, transP, lastInserted);

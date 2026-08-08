@@ -1863,8 +1863,12 @@
         if (docxTranslateBtn) docxTranslateBtn.disabled = true;
         setStatus(docxStatusEl, "Reading document and sending paragraphs to Gemini API...", "info");
 
+        const docxTypeInput = document.querySelector('input[name="docxType"]:checked');
+        const docxType = docxTypeInput ? docxTypeInput.value : "question";
+
         const formData = new FormData();
         formData.append("file", selectedDocxFile);
+        formData.append("docxType", docxType);
         if (apiKey) formData.append("apiKey", apiKey);
 
         const headers = getAuthHeaders();
