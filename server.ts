@@ -58,6 +58,7 @@ const TMP_USERS_PATH = path.join("/tmp", "users.json");
 const TMP_SESSIONS_PATH = path.join("/tmp", "sessions.json");
 const TMP_PROMPT_HISTORY_PATH = path.join("/tmp", "prompt_history.json");
 const TMP_TRANSLATION_HISTORY_PATH = path.join("/tmp", "translation_history.json");
+const TMP_API_KEY_USAGE_PATH = path.join("/tmp", "api_key_usage.json");
 
 const KV_URL = process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL;
 const KV_TOKEN = process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN;
@@ -129,6 +130,14 @@ async function ensurePgTables(): Promise<boolean> {
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
     `;
+    await sql`
+      CREATE TABLE IF NOT EXISTS api_key_usage (
+        usage_date VARCHAR(20) NOT NULL,
+        key_id VARCHAR(64) NOT NULL,
+        request_count INTEGER DEFAULT 0,
+        PRIMARY KEY (usage_date, key_id)
+      );
+    `;
     pgInitAttempted = true;
     return true;
   } catch (err) {
@@ -142,6 +151,7 @@ let memoryUsers: Record<string, any> = {};
 let memorySessions: Record<string, any> = {};
 let memoryPromptHistory: Array<any> = [];
 let memoryTranslationHistory: Array<any> = [];
+let memoryApiKeyUsage: Record<string, number> = {};
 
 async function loadFallbackData() {
   try {
@@ -159,6 +169,10 @@ async function loadFallbackData() {
   try {
     const tData = await fs.promises.readFile(TMP_TRANSLATION_HISTORY_PATH, "utf-8");
     memoryTranslationHistory = JSON.parse(tData);
+  } catch {}
+  try {
+    const kData = await fs.promises.readFile(TMP_API_KEY_USAGE_PATH, "utf-8");
+    memoryApiKeyUsage = JSON.parse(kData);
   } catch {}
 }
 loadFallbackData();
@@ -181,6 +195,11 @@ async function saveFallbackPromptHistory() {
 async function saveFallbackTranslationHistory() {
   try {
     await fs.promises.writeFile(TMP_TRANSLATION_HISTORY_PATH, JSON.stringify(memoryTranslationHistory, null, 2));
+  } catch {}
+}
+async function saveFallbackApiKeyUsage() {
+  try {
+    await fs.promises.writeFile(TMP_API_KEY_USAGE_PATH, JSON.stringify(memoryApiKeyUsage, null, 2));
   } catch {}
 }
 
@@ -583,6 +602,82 @@ async function getTranslationStats(): Promise<{
     guests,
     total: records.length,
   };
+}
+
+const API_KEY_DAILY_LIMIT = 1500;
+
+function getKeyIdentifier(userApiKey?: string): { id: string; isDefault: boolean; label: string } {
+  const cleanKey = (userApiKey || "").trim();
+  if (!cleanKey) {
+    return { id: "default", isDefault: true, label: "Default Server Key" };
+  }
+  const hash = crypto.createHash("sha256").update(cleanKey).digest("hex").slice(0, 12);
+  const maskedKey = cleanKey.length > 8 ? `${cleanKey.slice(0, 4)}...${cleanKey.slice(-4)}` : "Custom Key";
+  return { id: `key_${hash}`, isDefault: false, label: `Custom Key (${maskedKey})` };
+}
+
+async function getApiKeyUsage(userApiKey?: string) {
+  const dateStr = new Date().toISOString().slice(0, 10);
+  const keyInfo = getKeyIdentifier(userApiKey);
+  const compositeKey = `${dateStr}:${keyInfo.id}`;
+
+  let used = 0;
+
+  if (isPostgresConfigured()) {
+    try {
+      await ensurePgTables();
+      const { rows } = await sql`
+        SELECT request_count FROM api_key_usage
+        WHERE usage_date = ${dateStr} AND key_id = ${keyInfo.id};
+      `;
+      if (rows && rows.length > 0) {
+        used = Number(rows[0].request_count) || 0;
+      }
+    } catch (err) {
+      console.error("Error fetching API key usage from Postgres:", err);
+      used = memoryApiKeyUsage[compositeKey] || 0;
+    }
+  } else {
+    used = memoryApiKeyUsage[compositeKey] || 0;
+  }
+
+  const remaining = Math.max(0, API_KEY_DAILY_LIMIT - used);
+  const percentage = Math.min(100, Math.round((used / API_KEY_DAILY_LIMIT) * 1000) / 10);
+
+  return {
+    usedToday: used,
+    dailyLimit: API_KEY_DAILY_LIMIT,
+    remainingToday: remaining,
+    percentage,
+    isDefault: keyInfo.isDefault,
+    label: keyInfo.label,
+    date: dateStr,
+  };
+}
+
+async function incrementApiKeyUsage(userApiKey?: string) {
+  const dateStr = new Date().toISOString().slice(0, 10);
+  const keyInfo = getKeyIdentifier(userApiKey);
+  const compositeKey = `${dateStr}:${keyInfo.id}`;
+
+  memoryApiKeyUsage[compositeKey] = (memoryApiKeyUsage[compositeKey] || 0) + 1;
+  await saveFallbackApiKeyUsage();
+
+  if (isPostgresConfigured()) {
+    try {
+      await ensurePgTables();
+      await sql`
+        INSERT INTO api_key_usage (usage_date, key_id, request_count)
+        VALUES (${dateStr}, ${keyInfo.id}, 1)
+        ON CONFLICT (usage_date, key_id)
+        DO UPDATE SET request_count = api_key_usage.request_count + 1;
+      `;
+    } catch (err) {
+      console.error("Error incrementing API key usage in Postgres:", err);
+    }
+  }
+
+  return await getApiKeyUsage(userApiKey);
 }
 
 function extractBearerToken(req: Request): string | null {
@@ -1985,9 +2080,65 @@ ${text}`;
       console.error("Failed to record translation usage:", err);
     }
 
-    return res.json({ translation: legacyTranslation, unicode: unicodeTranslation, guest_id: guestId });
+    let keyUsage: any = null;
+    try {
+      keyUsage = await incrementApiKeyUsage(userApiKey);
+    } catch (err) {
+      console.error("Failed to increment API key usage:", err);
+    }
+
+    return res.json({ translation: legacyTranslation, unicode: unicodeTranslation, guest_id: guestId, keyUsage });
   } catch (exc: any) {
     return res.status(502).json({ error: `The Gemini API request failed: ${exc?.message || exc}` });
+  }
+});
+
+app.get("/api/key-usage", async (req: Request, res: Response) => {
+  const userApiKey = (req.query.apiKey || req.headers["x-api-key"] || "").toString().trim();
+  try {
+    const usage = await getApiKeyUsage(userApiKey);
+    return res.json(usage);
+  } catch (err) {
+    return res.status(500).json({ error: "Failed to get API key usage." });
+  }
+});
+
+app.post("/api/admin/key-usage", async (req: Request, res: Response) => {
+  try {
+    const user = await getCurrentUser(req);
+    if (!isUserAdminAccount(user, req)) {
+      return res.status(403).json({ error: "Admin authentication required." });
+    }
+
+    const { keyType, customApiKey, newCount } = req.body || {};
+    const count = Math.max(0, parseInt(newCount, 10) || 0);
+
+    const targetApiKey = keyType === "custom" ? (customApiKey || "").toString().trim() : "";
+    const dateStr = new Date().toISOString().slice(0, 10);
+    const keyInfo = getKeyIdentifier(targetApiKey);
+    const compositeKey = `${dateStr}:${keyInfo.id}`;
+
+    memoryApiKeyUsage[compositeKey] = count;
+    await saveFallbackApiKeyUsage();
+
+    if (isPostgresConfigured()) {
+      try {
+        await ensurePgTables();
+        await sql`
+          INSERT INTO api_key_usage (usage_date, key_id, request_count)
+          VALUES (${dateStr}, ${keyInfo.id}, ${count})
+          ON CONFLICT (usage_date, key_id)
+          DO UPDATE SET request_count = ${count};
+        `;
+      } catch (err) {
+        console.error("Error setting API key usage in Postgres:", err);
+      }
+    }
+
+    const updatedUsage = await getApiKeyUsage(targetApiKey);
+    return res.json({ success: true, usage: updatedUsage });
+  } catch (err: any) {
+    return res.status(500).json({ error: "Failed to update API key usage." });
   }
 });
 
@@ -2092,6 +2243,12 @@ app.post("/api/generate", async (req: Request, res: Response) => {
     const safeTopic =
       topic.replace(/[^A-Za-z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 40) || "MCQ";
     const filename = `${safeTopic}_${resultQtype}_${timestamp}.docx`;
+
+    try {
+      await incrementApiKeyUsage(userApiKey);
+    } catch (err) {
+      console.error("Failed to increment API key usage in generate:", err);
+    }
 
     res.setHeader(
       "Content-Type",

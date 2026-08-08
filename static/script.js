@@ -134,10 +134,91 @@
     );
   }
 
+  let keyUsageDebounceTimer = null;
+
+  function updateKeyUsageUI(data) {
+    if (!data) return;
+
+    const cards = [
+      {
+        badge: document.getElementById("translate-key-badge"),
+        count: document.getElementById("translate-key-count"),
+        remaining: document.getElementById("translate-key-remaining"),
+        fill: document.getElementById("translate-key-fill"),
+      },
+      {
+        badge: document.getElementById("generator-key-badge"),
+        count: document.getElementById("generator-key-count"),
+        remaining: document.getElementById("generator-key-remaining"),
+        fill: document.getElementById("generator-key-fill"),
+      },
+    ];
+
+    cards.forEach((c) => {
+      if (c.badge) {
+        c.badge.textContent = data.isDefault ? "Default Server Key" : data.label;
+        if (data.isDefault) {
+          c.badge.classList.add("default-key");
+          c.badge.classList.remove("custom-key");
+        } else {
+          c.badge.classList.add("custom-key");
+          c.badge.classList.remove("default-key");
+        }
+      }
+
+      if (c.count) {
+        c.count.textContent = `${(data.usedToday || 0).toLocaleString()} / ${(data.dailyLimit || 1500).toLocaleString()} reqs`;
+      }
+
+      if (c.remaining) {
+        c.remaining.textContent = `(${(data.remainingToday || 0).toLocaleString()} remaining)`;
+      }
+
+      if (c.fill) {
+        const pct = Math.min(100, Math.max(0, data.percentage || 0));
+        c.fill.style.width = `${pct}%`;
+
+        c.fill.classList.remove("normal", "warning", "danger");
+        if (pct > 90) {
+          c.fill.classList.add("danger");
+        } else if (pct > 70) {
+          c.fill.classList.add("warning");
+        } else {
+          c.fill.classList.add("normal");
+        }
+      }
+    });
+  }
+
+  async function refreshKeyUsage(providedKey) {
+    const keyToQuery = providedKey !== undefined ? providedKey : getUserApiKey();
+    try {
+      const url = keyToQuery
+        ? `/api/key-usage?apiKey=${encodeURIComponent(keyToQuery)}`
+        : "/api/key-usage";
+      const res = await fetch(url);
+      if (res.ok) {
+        const data = await res.json();
+        updateKeyUsageUI(data);
+      }
+    } catch (err) {
+      console.warn("Could not refresh key usage:", err);
+    }
+  }
+
+  function scheduleKeyUsageRefresh(val) {
+    if (keyUsageDebounceTimer) clearTimeout(keyUsageDebounceTimer);
+    keyUsageDebounceTimer = setTimeout(() => {
+      refreshKeyUsage(val);
+    }, 250);
+  }
+
   function initApiKey() {
     const savedKey = localStorage.getItem(STORAGE_KEY_API) || "";
     if (apiKeyInput) apiKeyInput.value = savedKey;
     if (translateApiKeyInput) translateApiKeyInput.value = savedKey;
+
+    refreshKeyUsage(savedKey);
 
     const syncApiKey = (val) => {
       if (val) {
@@ -147,6 +228,8 @@
       }
       if (apiKeyInput && apiKeyInput.value !== val) apiKeyInput.value = val;
       if (translateApiKeyInput && translateApiKeyInput.value !== val) translateApiKeyInput.value = val;
+
+      scheduleKeyUsageRefresh(val);
     };
 
     if (apiKeyInput) {
@@ -165,6 +248,11 @@
         syncApiKey(translateApiKeyInput.value.trim());
       });
     }
+
+    // Auto refresh usage periodically (every 12 seconds)
+    setInterval(() => {
+      refreshKeyUsage();
+    }, 12000);
   }
 
   // Helper for status messages
@@ -764,6 +852,7 @@
       URL.revokeObjectURL(url);
 
       setStatus(statusEl, `Downloaded ${filename}`, "success");
+      refreshKeyUsage(apiKey);
     } catch (err) {
       setStatus(
         statusEl,
@@ -818,6 +907,12 @@
 
       if (data.guest_id) {
         localStorage.setItem("guest_id", data.guest_id);
+      }
+
+      if (data.keyUsage) {
+        updateKeyUsageUI(data.keyUsage);
+      } else {
+        refreshKeyUsage(apiKey);
       }
 
       if (translateResultInput) {
@@ -1390,6 +1485,65 @@
 
   if (adminAddForm) {
     adminAddForm.addEventListener("submit", adminAddWord);
+  }
+
+  // Admin: API Key Usage Management
+  const adminKeyUsageForm = document.getElementById("admin-key-usage-form");
+  const adminKeyTypeSelect = document.getElementById("admin-key-type-select");
+  const adminCustomKeyWrapper = document.getElementById("admin-custom-key-wrapper");
+  const adminCustomKeyInput = document.getElementById("admin-custom-key-input");
+  const adminKeyCountInput = document.getElementById("admin-key-count-input");
+  const adminKeyUsageStatus = document.getElementById("admin-key-usage-status");
+
+  if (adminKeyTypeSelect) {
+    adminKeyTypeSelect.addEventListener("change", () => {
+      if (adminKeyTypeSelect.value === "custom") {
+        if (adminCustomKeyWrapper) adminCustomKeyWrapper.style.display = "block";
+      } else {
+        if (adminCustomKeyWrapper) adminCustomKeyWrapper.style.display = "none";
+      }
+    });
+  }
+
+  if (adminKeyUsageForm) {
+    adminKeyUsageForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const keyType = adminKeyTypeSelect ? adminKeyTypeSelect.value : "default";
+      const customApiKey = adminCustomKeyInput ? adminCustomKeyInput.value.trim() : "";
+      const newCount = adminKeyCountInput ? adminKeyCountInput.value.trim() : "0";
+
+      if (keyType === "custom" && !customApiKey) {
+        setStatus(adminKeyUsageStatus, "Please enter the Custom API Key to update.", "error");
+        return;
+      }
+
+      try {
+        setStatus(adminKeyUsageStatus, "Updating API key usage count…", "info");
+        const headers = getAuthHeaders();
+        headers["x-admin-pass"] = "ictfromabcadmin";
+
+        const res = await fetch("/api/admin/key-usage", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ keyType, customApiKey, newCount }),
+        });
+
+        const data = await res.json();
+        if (!res.ok || !data.success) {
+          throw new Error(data.error || "Failed to update API key usage.");
+        }
+
+        setStatus(adminKeyUsageStatus, "API key usage count updated successfully!", "success");
+        if (adminKeyCountInput) adminKeyCountInput.value = "";
+
+        if (data.usage) {
+          updateKeyUsageUI(data.usage);
+        }
+        refreshKeyUsage();
+      } catch (err) {
+        setStatus(adminKeyUsageStatus, err.message || "Failed to update usage count.", "error");
+      }
+    });
   }
 
   function escapeHtml(str) {

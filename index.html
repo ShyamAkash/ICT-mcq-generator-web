@@ -104,6 +104,20 @@
               autocomplete="off"
               placeholder="default model එකේ limit පැනලනන් API key එකක් හදල මෙතෙන්ට දාන්න"
             >
+            <div class="key-usage-card" id="generator-key-usage-card">
+              <div class="key-usage-top">
+                <div class="key-usage-left">
+                  <span class="key-usage-badge default-key" id="generator-key-badge">Default Server Key</span>
+                  <span class="key-usage-title" title="Tracked via this application. Google Gemini API does not expose a public API endpoint to query global usage across other external apps.">App Usage Today (RPD)</span>
+                </div>
+                <div class="key-usage-right">
+                  <span class="key-usage-count" id="generator-key-count">0 / 1,500 reqs</span>
+                </div>
+              </div>
+              <div class="key-usage-bar-bg">
+                <div class="key-usage-bar-fill normal" id="generator-key-fill" style="width: 0%;"></div>
+              </div>
+            </div>
           </div>
 
           <div class="field">
@@ -178,6 +192,20 @@
               autocomplete="off"
               placeholder="default model එකේ limit පැනලනන් API key එකක් හදල මෙතෙන්ට දාන්න"
             >
+            <div class="key-usage-card" id="translate-key-usage-card">
+              <div class="key-usage-top">
+                <div class="key-usage-left">
+                  <span class="key-usage-badge default-key" id="translate-key-badge">Default Server Key</span>
+                  <span class="key-usage-title" title="Tracked via this application. Google Gemini API does not expose a public API endpoint to query global usage across other external apps.">App Usage Today (RPD)</span>
+                </div>
+                <div class="key-usage-right">
+                  <span class="key-usage-count" id="translate-key-count">0 / 1,500 reqs</span>
+                </div>
+              </div>
+              <div class="key-usage-bar-bg">
+                <div class="key-usage-bar-fill normal" id="translate-key-fill" style="width: 0%;"></div>
+              </div>
+            </div>
           </div>
 
           <div class="field">
@@ -200,7 +228,7 @@
 
           <div class="field">
             <div class="label-row">
-              <label for="translate-result">Sinhala Translation (Legacy DL/FM Font Format)</label>
+              <label for="translate-result">Sinhala Translation (4u-Chami. Font Format)</label>
               <div class="btn-group-sm" style="display: flex; gap: 6px; align-items: center;">
                 <button type="button" id="toggle-font-btn" class="btn-sm" style="display: none; color: #ffffff !important;">View in Unicode</button>
                 <button type="button" id="copy-translation-btn" class="btn-sm" style="display: none; color: #ffffff !important;">Copy Legacy</button>
@@ -380,6 +408,35 @@
                   <!-- Dynamically populated -->
                 </div>
               </div>
+            </div>
+
+            <!-- API Key Usage Management Section -->
+            <div class="vocab-section" style="margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--border-soft);">
+              <div class="section-heading">API Key Usage Management</div>
+              <p class="field-hint" style="margin-bottom: 12px; color: var(--text-dim); font-size: 13px;">
+                Manually set or reset the recorded usage count for the Default Server Key or custom API keys.
+              </p>
+              <form id="admin-key-usage-form" class="vocab-form" style="display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end;">
+                <div class="field" style="margin-bottom: 0; min-width: 180px; flex: 1;">
+                  <label for="admin-key-type-select" class="field-label">Target Key</label>
+                  <select id="admin-key-type-select" class="text-input" style="padding: 8px 10px;">
+                    <option value="default">Default Server Key</option>
+                    <option value="custom">Custom API Key</option>
+                  </select>
+                </div>
+                <div id="admin-custom-key-wrapper" class="field" style="display: none; margin-bottom: 0; min-width: 200px; flex: 1;">
+                  <label for="admin-custom-key-input" class="field-label">Custom API Key</label>
+                  <input type="password" id="admin-custom-key-input" class="text-input" placeholder="AIzaSy..." autocomplete="off" />
+                </div>
+                <div class="field" style="margin-bottom: 0; min-width: 140px; flex: 1;">
+                  <label for="admin-key-count-input" class="field-label">New Usage Count Today</label>
+                  <input type="number" id="admin-key-count-input" class="text-input" min="0" max="100000" placeholder="e.g. 0" required />
+                </div>
+                <div class="field" style="margin-bottom: 0; min-width: 140px;">
+                  <button type="submit" id="admin-key-usage-btn" class="generate-btn vocab-submit-btn" style="height: 38px;">Update Usage</button>
+                </div>
+              </form>
+              <p id="admin-key-usage-status" class="status" role="status" aria-live="polite" style="margin-top: 8px;"></p>
             </div>
           </div>
 
