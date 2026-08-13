@@ -9,14 +9,14 @@ export function ConvertToLegacy(text: string): string {
   s = s.replaceAll("%", "]");
   s = s.replaceAll("/", "$");
   s = s.replaceAll("–", "-");
-  s = s.replaceAll("?", "@");
+  s = s.replaceAll("?", "?");
   s = s.replaceAll("!", "æ");
   s = s.replaceAll("=", "}");
   s = s.replaceAll(".", "'");
-  s = s.replaceAll("+", "¬");
+  s = s.replaceAll("+", "+");
   s = s.replaceAll(":", "(");
   s = s.replaceAll("÷", "\u00ad");
-  s = s.replaceAll(";", "¦");
+  s = s.replaceAll(";", ";");
 
   // ත්‍රෛ combo
   s = s.replaceAll("ත්\u200dරෛ", "ff;%");
