@@ -49,6 +49,8 @@ app.use(express.json());
 app.use(cookieParser());
 
 const PROJECT_ROOT = process.cwd();
+app.use("/static", express.static(path.join(PROJECT_ROOT, "static")));
+app.use(express.static(PROJECT_ROOT));
 const TEMPLATES_DIR = path.join(PROJECT_ROOT, "templates");
 const PROMPT_PATH = path.join(PROJECT_ROOT, "prompt.txt");
 const PENDING_VOCAB_PATH = path.join(PROJECT_ROOT, "pending_vocab.json");
@@ -403,6 +405,29 @@ async function updateUserRole(userId: string, newRole: string): Promise<User | n
   const user = await findUserById(userId);
   if (user) {
     user.role = newRole;
+  }
+  return user;
+}
+
+async function updateUserName(userId: string, newName: string): Promise<User | null> {
+  if (isPostgresConfigured()) {
+    try {
+      await ensurePgTables();
+      await sql`UPDATE users SET name = ${newName} WHERE id = ${userId}`;
+    } catch (err) {
+      console.error("Error updating user name in Postgres:", err);
+    }
+  }
+
+  if (memoryUsers[userId]) {
+    memoryUsers[userId].name = newName;
+    await saveFallbackUsers();
+    return memoryUsers[userId];
+  }
+
+  const user = await findUserById(userId);
+  if (user) {
+    user.name = newName;
   }
   return user;
 }
@@ -1690,6 +1715,24 @@ app.post("/api/auth/logout", async (req: Request, res: Response) => {
   return res.json({ success: true });
 });
 
+// Update user display name / first name
+app.post(["/api/user/update-name", "/api/user/name"], async (req: Request, res: Response) => {
+  try {
+    const user = await getCurrentUser(req);
+    if (!user) {
+      return res.status(401).json({ error: "Authentication required." });
+    }
+    const { name } = req.body || {};
+    if (!name || typeof name !== "string" || !name.trim()) {
+      return res.status(400).json({ error: "Name cannot be empty." });
+    }
+    const updatedUser = await updateUserName(user.id, name.trim());
+    return res.json({ success: true, user: updatedUser });
+  } catch (err: any) {
+    return res.status(500).json({ error: "Failed to update user name." });
+  }
+});
+
 // Public: Get active vocabulary
 app.get("/api/vocabulary", async (req: Request, res: Response) => {
   try {
@@ -2842,19 +2885,39 @@ app.post("/api/generate", async (req: Request, res: Response) => {
     console.error("Failed to record prompt history:", err);
   }
 
+  // If client requested raw JSON (e.g., in multi-question mode)
+  if (payload.returnJson) {
+    try {
+      await incrementApiKeyUsage(userApiKey);
+    } catch (_) {}
+    return res.json({
+      success: true,
+      resdict,
+      qtype: resultQtype,
+      topic,
+    });
+  }
+
   try {
     const replacements = buildReplacements(resdict, resultQtype);
     const templatePath = TEMPLATE_FILES[resultQtype];
     const docxBuffer = await findAndReplaceInDocx(templatePath, replacements);
 
-    const timestamp = new Date()
-      .toISOString()
-      .replace(/[-:]/g, "")
-      .replace(/\..+/, "")
-      .replace("T", "_");
-    const safeTopic =
-      topic.replace(/[^A-Za-z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 40) || "MCQ";
-    const filename = `${safeTopic}_${resultQtype}_${timestamp}.docx`;
+    let filename = (payload.filename || "").toString().trim();
+    if (!filename) {
+      const timestamp = new Date()
+        .toISOString()
+        .replace(/[-:]/g, "")
+        .replace(/\..+/, "")
+        .replace("T", "_");
+      const safeTopic =
+        topic.replace(/[^A-Za-z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 40) || "MCQ";
+      filename = `${safeTopic}_${resultQtype}_${timestamp}.docx`;
+    } else if (!filename.toLowerCase().endsWith(".docx")) {
+      filename += ".docx";
+    }
+
+    const safeFilename = filename.replace(/[/\\?%*:|"<>]/g, "_");
 
     try {
       await incrementApiKeyUsage(userApiKey);
@@ -2868,7 +2931,7 @@ app.post("/api/generate", async (req: Request, res: Response) => {
     );
     res.setHeader(
       "Content-Disposition",
-      `attachment; filename="${filename}"; filename*=${filename}`
+      `attachment; filename="${encodeURIComponent(safeFilename)}"; filename*=${encodeURIComponent(safeFilename)}`
     );
     return res.send(docxBuffer);
   } catch (exc: any) {
@@ -2876,10 +2939,229 @@ app.post("/api/generate", async (req: Request, res: Response) => {
   }
 });
 
-export default app;
+async function buildMultiQuestionDocxBuffer(
+  questions: Array<{ resdict: any; qtype: string; topic?: string }>
+): Promise<Buffer> {
+  if (!questions || questions.length === 0) {
+    throw new Error("No questions provided.");
+  }
 
-if (process.env.NODE_ENV !== "production" || !process.env.VERCEL) {
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server running on http://0.0.0.0:${PORT}`);
-  });
+  const domParser = new DOMParser();
+  const xmlSerializer = new XMLSerializer();
+
+  const firstQ = questions[0];
+  const firstQType = firstQ.qtype || "normal";
+  const firstTemplatePath = TEMPLATE_FILES[firstQType] || TEMPLATE_FILES.normal;
+  const firstContent = await fs.promises.readFile(firstTemplatePath);
+  const masterZip = await JSZip.loadAsync(firstContent);
+
+  const allQuestionBodyNodes: Node[] = [];
+
+  for (let idx = 0; idx < questions.length; idx++) {
+    const q = questions[idx];
+    const qtype = q.qtype || "normal";
+    const templatePath = TEMPLATE_FILES[qtype] || TEMPLATE_FILES.normal;
+    const replacements = buildReplacements(q.resdict, qtype);
+
+    const tContent = await fs.promises.readFile(templatePath);
+    const tZip = await JSZip.loadAsync(tContent);
+    const docFile = tZip.file("word/document.xml");
+    if (!docFile) continue;
+
+    const xmlText = await docFile.async("string");
+    const doc = domParser.parseFromString(xmlText, "text/xml");
+
+    const paragraphs = doc.getElementsByTagName("w:p");
+    for (let i = 0; i < paragraphs.length; i++) {
+      const p = paragraphs.item(i);
+      if (!p) continue;
+
+      const tElementsLive = p.getElementsByTagName("w:t");
+      if (!tElementsLive || tElementsLive.length === 0) continue;
+
+      const tElements: Element[] = [];
+      for (let j = 0; j < tElementsLive.length; j++) {
+        tElements.push(tElementsLive.item(j)!);
+      }
+
+      let pText = "";
+      for (const t of tElements) pText += t.textContent || "";
+
+      let hasMatch = false;
+      for (const oldKey of Object.keys(replacements)) {
+        if (pText.includes(oldKey)) {
+          hasMatch = true;
+          break;
+        }
+      }
+      if (!hasMatch) continue;
+
+      for (const [oldKey, newVal] of Object.entries(replacements)) {
+        if (typeof newVal === "string") {
+          pText = pText.split(oldKey).join(newVal);
+        }
+      }
+
+      let segmentKey: string | null = null;
+      let segments: TextSegment[] | null = null;
+      for (const [oldKey, newVal] of Object.entries(replacements)) {
+        if (Array.isArray(newVal) && pText.includes(oldKey)) {
+          segmentKey = oldKey;
+          segments = newVal;
+          break;
+        }
+      }
+
+      const firstT = tElements[0];
+      const firstRun = firstT.parentNode as Element;
+
+      if (segments && segmentKey) {
+        const paragraphEl = firstRun.parentNode as Element;
+        const templateRPr = firstRun.getElementsByTagName("w:rPr").item(0) ?? null;
+
+        const pos = pText.indexOf(segmentKey);
+        const before = pText.slice(0, pos);
+        const after = pText.slice(pos + segmentKey.length);
+
+        const newRuns: Element[] = [];
+        if (before) newRuns.push(buildRun(doc, templateRPr, before, false));
+        for (const seg of segments) {
+          newRuns.push(buildRun(doc, templateRPr, seg.text, seg.isEnglish));
+        }
+        if (after) newRuns.push(buildRun(doc, templateRPr, after, false));
+
+        for (const r of newRuns) paragraphEl.insertBefore(r, firstRun);
+        paragraphEl.removeChild(firstRun);
+      } else if (pText.includes("\n")) {
+        const parent = firstT.parentNode;
+        if (parent) {
+          const lines = pText.split("\n");
+          for (let l = 0; l < lines.length; l++) {
+            if (l > 0) {
+              parent.insertBefore(doc.createElementNS(WORD_NS, "w:br"), firstT);
+            }
+            const tNode = doc.createElementNS(WORD_NS, "w:t");
+            if (lines[l].startsWith(" ") || lines[l].endsWith(" ")) {
+              tNode.setAttribute("xml:space", "preserve");
+            }
+            tNode.textContent = lines[l];
+            parent.insertBefore(tNode, firstT);
+          }
+          parent.removeChild(firstT);
+        }
+      } else {
+        if (pText.startsWith(" ") || pText.endsWith(" ")) {
+          firstT.setAttribute("xml:space", "preserve");
+        }
+        firstT.textContent = pText;
+      }
+
+      for (let j = 1; j < tElements.length; j++) {
+        tElements[j].textContent = "";
+      }
+    }
+
+    const bodyList = doc.getElementsByTagName("w:body");
+    if (bodyList.length > 0) {
+      const body = bodyList.item(0)!;
+      const childNodes = Array.from(body.childNodes);
+      for (const node of childNodes) {
+        if (node.nodeType === 1) {
+          const tag = ((node as Element).tagName || (node as Element).nodeName || "").toLowerCase();
+          if (tag === "w:sectpr" || tag === "sectpr" || tag.endsWith(":sectpr")) {
+            continue;
+          }
+        }
+        allQuestionBodyNodes.push(node);
+      }
+
+
+    }
+  }
+
+  const masterDocFile = masterZip.file("word/document.xml");
+  if (!masterDocFile) throw new Error("Could not locate word/document.xml in template.");
+
+  const masterXmlText = await masterDocFile.async("string");
+  const masterDoc = domParser.parseFromString(masterXmlText, "text/xml");
+  const masterBody = masterDoc.getElementsByTagName("w:body").item(0);
+
+  if (!masterBody) throw new Error("Master w:body element not found.");
+
+  let sectPrNode: Node | null = null;
+  const masterChildren = Array.from(masterBody.childNodes);
+  for (const child of masterChildren) {
+    if (child.nodeType === 1) {
+      const tag = ((child as Element).tagName || (child as Element).nodeName || "").toLowerCase();
+      if (tag === "w:sectpr" || tag === "sectpr" || tag.endsWith(":sectpr")) {
+        sectPrNode = child;
+      }
+    }
+    masterBody.removeChild(child);
+  }
+
+  for (const node of allQuestionBodyNodes) {
+    const importedNode = masterDoc.importNode(node, true);
+    masterBody.appendChild(importedNode);
+  }
+
+  if (sectPrNode) {
+    masterBody.appendChild(sectPrNode);
+  }
+
+  const updatedXml = xmlSerializer.serializeToString(masterDoc);
+  masterZip.file("word/document.xml", updatedXml);
+
+  return await masterZip.generateAsync({ type: "nodebuffer" });
 }
+
+app.post("/api/generate-multi-docx", async (req: Request, res: Response) => {
+  const user = await getCurrentUser(req);
+  if (!user) {
+    return res.status(401).json({
+      error: "Authentication required. Please sign in to download generated MCQ documents.",
+    });
+  }
+
+  const { questions, filename: customFilename, apiKey: userApiKey } = req.body || {};
+  if (!Array.isArray(questions) || questions.length === 0) {
+    return res.status(400).json({ error: "Please add at least one question to the document." });
+  }
+
+  try {
+    const docxBuffer = await buildMultiQuestionDocxBuffer(questions);
+
+    let filename = (customFilename || "").toString().trim();
+    if (!filename) {
+      filename = `MCQ_Document_${questions.length}_Questions.docx`;
+    }
+    if (!filename.toLowerCase().endsWith(".docx")) {
+      filename += ".docx";
+    }
+
+    const safeFilename = filename.replace(/[/\\?%*:|"<>]/g, "_");
+
+    try {
+      await incrementApiKeyUsage(userApiKey);
+    } catch (_) {}
+
+    res.setHeader(
+      "Content-Type",
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    );
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="${encodeURIComponent(safeFilename)}"; filename*=${encodeURIComponent(safeFilename)}`
+    );
+    return res.send(docxBuffer);
+  } catch (err: any) {
+    console.error("Error building multi-question docx:", err);
+    return res.status(500).json({ error: `Failed to build multi-question document: ${err?.message || err}` });
+  }
+});
+
+app.listen(PORT, "0.0.0.0", () => {
+  console.log(`Server running on http://0.0.0.0:${PORT}`);
+});
+
+export default app;

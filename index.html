@@ -99,6 +99,38 @@
         </div>
 
         <form id="mcq-form" novalidate>
+          <!-- User Used Name Card (for logged-in users) -->
+          <div id="mcq-user-name-card" class="user-name-card is-hidden">
+            <div class="user-name-card-header">
+              <span class="user-name-card-icon">👤</span>
+              <div class="user-name-card-title">
+                <strong>Used Name for Document File Names</strong>
+                <span class="sub-label">Replaces "Shyam" in preformatted filenames like "Shyam 2027 PHY..."</span>
+              </div>
+            </div>
+            <div class="input-with-button">
+              <input type="text" id="mcq-used-name-input" class="mono-input" placeholder="e.g. Shyam">
+              <button type="button" id="save-mcq-used-name-btn" class="btn-sm btn-accent-sm">Save Used Name</button>
+            </div>
+            <span id="mcq-used-name-status" class="sub-label-status"></span>
+          </div>
+
+          <!-- Generation Mode Switch (Single Question vs Multiple Questions to 1 DOCX) -->
+          <div class="field mode-switch-field">
+            <div class="label-row">
+              <label>Generation Mode</label>
+              <span class="sub-label">Single Question DOCX vs Combine Multiple Questions</span>
+            </div>
+            <div class="mode-switch-group">
+              <button type="button" id="mcq-mode-single" class="mode-btn is-active">
+                <span class="mode-icon">📄</span> Single Question
+              </button>
+              <button type="button" id="mcq-mode-multi" class="mode-btn">
+                <span class="mode-icon">📑</span> Multi-Question Mode <span class="mode-badge" id="multi-count-badge" style="display: none;">0</span>
+              </button>
+            </div>
+          </div>
+
           <div class="field">
             <div class="label-row">
               <label for="api-key">Gemini API Key</label>
@@ -143,7 +175,7 @@
             <select
               id="model"
               name="model"
-              class="mono-input"
+              class="mono-input model-select"
               required
             >
               <option value="gemini-3.6-flash" selected>gemini-3.6-flash</option>
@@ -183,6 +215,68 @@
 
           <p id="status" class="status" role="status" aria-live="polite"></p>
         </form>
+
+        <!-- Multi-Question Document Session Panel -->
+        <div id="multi-doc-panel" class="multi-doc-panel is-hidden">
+          <div class="panel-header">
+            <div class="panel-title-row">
+              <h3>📑 Combined Document Session</h3>
+              <span id="multi-doc-count" class="badge-count">0 Questions</span>
+            </div>
+            <button type="button" id="clear-multi-doc-btn" class="btn-sm btn-danger-sm">Clear Session</button>
+          </div>
+
+          <!-- Summary Stats Card -->
+          <div id="multi-stats-card" class="multi-stats-card">
+            <div class="stats-card-top">
+              <div class="stats-metric-box">
+                <div class="stats-metric-value" id="stats-total-count">0</div>
+                <div class="stats-metric-label">Total Questions</div>
+              </div>
+              <div class="stats-type-counts" id="stats-type-counts">
+                <span class="type-badge" data-type="normal">Normal: 0</span>
+                <span class="type-badge" data-type="statement">Statement: 0</span>
+                <span class="type-badge" data-type="code">Code: 0</span>
+              </div>
+            </div>
+            <div class="stats-prompts-preview">
+              <div class="stats-preview-title">Session Question Summary</div>
+              <div id="stats-prompts-list" class="stats-prompts-list">
+                <span class="empty-stats-text">No questions generated in this session yet.</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="questions-list-header" style="margin-top: 14px; margin-bottom: 6px; display: flex; justify-content: space-between; align-items: center;">
+            <label style="font-size: 13px; font-weight: 600; color: var(--text-dim);">Questions Sequence</label>
+            <span class="sub-label" style="font-size: 11px; color: var(--text-faint);">Drag items or use ▲ ▼ arrows to reorder</span>
+          </div>
+          <div id="multi-questions-list" class="questions-list">
+            <p class="empty-list-msg">No questions added yet. Fill out the form above and click "Add Question to Document" to add questions one after the other.</p>
+          </div>
+
+          <div class="field filename-selection-field" style="margin-top: 16px;">
+            <div class="label-row">
+              <label for="multi-docx-filename">Select or Edit Preformatted Document File Name</label>
+              <span class="sub-label">Click a preset then edit freely</span>
+            </div>
+            <div class="filename-presets-group">
+              <button type="button" class="preset-btn" data-target="multi" data-preset="Day Paper">Day Paper</button>
+              <button type="button" class="preset-btn" data-target="multi" data-preset="REV Paper">REV Paper</button>
+              <button type="button" class="preset-btn" data-target="multi" data-preset="Main Paper">Main Paper</button>
+              <button type="button" class="preset-btn" data-target="multi" data-preset="Daily Quiz">Daily Quiz</button>
+            </div>
+            <div class="input-row" style="margin-top: 8px; display: flex; gap: 6px; align-items: center;">
+              <input type="text" id="multi-docx-filename" class="mono-input" placeholder="Select preset or type custom filename...">
+              <span class="file-ext" style="font-family: var(--mono); font-size: 13px; color: var(--text-dim); font-weight: 600;">.docx</span>
+            </div>
+          </div>
+
+          <button type="button" id="download-multi-docx-btn" class="generate-btn download-multi-btn" disabled>
+            <span class="generate-btn__spinner" aria-hidden="true"></span>
+            <span class="generate-btn__label">Download Combined .docx Document</span>
+          </button>
+        </div>
       </section>
 
       <!-- Translator View -->
@@ -329,7 +423,8 @@
 
           <div class="actions">
             <button type="submit" id="docx-translate-btn" class="generate-btn" disabled>
-              <span class="btn-text">Translate DOCX Document</span>
+              <span class="generate-btn__spinner" aria-hidden="true"></span>
+              <span class="generate-btn__label">Translate DOCX Document</span>
             </button>
           </div>
 

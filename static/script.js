@@ -1,6 +1,16 @@
 (() => {
   "use strict";
 
+  function escapeHtml(str) {
+    if (!str) return "";
+    return String(str)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#039;");
+  }
+
   // Navigation Tabs & Hamburger Menu
   const tabGenerator = document.getElementById("tab-generator");
   const tabTranslator = document.getElementById("tab-translator");
@@ -376,6 +386,22 @@
       // MCQ Generator access
       if (generatorAuthBanner) generatorAuthBanner.classList.add("is-hidden");
       if (mcqForm) mcqForm.classList.remove("is-hidden");
+      const mcqUserNameCardEl = document.getElementById("mcq-user-name-card");
+      const mcqUsedNameInputEl = document.getElementById("mcq-used-name-input");
+      if (mcqUserNameCardEl) {
+        if (typeof mcqMode !== "undefined" && mcqMode === "multi") {
+          mcqUserNameCardEl.classList.remove("is-hidden");
+        } else {
+          mcqUserNameCardEl.classList.add("is-hidden");
+        }
+      }
+      if (mcqUsedNameInputEl && (!mcqUsedNameInputEl.value || mcqUsedNameInputEl.value === "Shyam")) {
+        if (typeof getUserFirstName === "function") {
+          mcqUsedNameInputEl.value = getUserFirstName();
+        } else {
+          mcqUsedNameInputEl.value = (currentUser.name || "Shyam").trim().split(/\s+/)[0] || "Shyam";
+        }
+      }
 
       // Admin access tab & hamburger menu item
       if (isAdmin) {
@@ -846,6 +872,364 @@
     }
   }
 
+  // Multi-Question & Filename Presets State
+  let mcqMode = "single"; // "single" | "multi"
+  let multiQuestions = []; // Array of { resdict, qtype, topic }
+  let customUsedName = localStorage.getItem("mcq_used_name") || "";
+
+  const PRESET_FILENAMES = {
+    "Day Paper": "Shyam 2027 PHY 57 MCQ 1,2,3",
+    "REV Paper": "Shyam 2026 REV 19 MCQ 13,14,15",
+    "Main Paper": "2027 main paper 2 Shyam questions",
+    "Daily Quiz": "2028 Quiz [17,19,20,23] Shyam"
+  };
+
+  const mcqModeSingleBtn = document.getElementById("mcq-mode-single");
+  const mcqModeMultiBtn = document.getElementById("mcq-mode-multi");
+  const multiCountBadge = document.getElementById("multi-count-badge");
+  const singleFilenameBox = document.getElementById("single-filename-box");
+  const singleDocxFilenameInput = document.getElementById("single-docx-filename");
+  const multiDocPanel = document.getElementById("multi-doc-panel");
+  const multiDocCountEl = document.getElementById("multi-doc-count");
+  const multiQuestionsListEl = document.getElementById("multi-questions-list");
+  const clearMultiDocBtn = document.getElementById("clear-multi-doc-btn");
+  const multiDocxFilenameInput = document.getElementById("multi-docx-filename");
+  const downloadMultiDocxBtn = document.getElementById("download-multi-docx-btn");
+  const mcqUserNameCard = document.getElementById("mcq-user-name-card");
+  const mcqUsedNameInput = document.getElementById("mcq-used-name-input");
+  const saveMcqUsedNameBtn = document.getElementById("save-mcq-used-name-btn");
+  const mcqUsedNameStatus = document.getElementById("mcq-used-name-status");
+
+  // Summary Stats Card Elements
+  const statsTotalCountEl = document.getElementById("stats-total-count");
+  const statsTypeCountsEl = document.getElementById("stats-type-counts");
+  const statsPromptsListEl = document.getElementById("stats-prompts-list");
+
+  function getUserFirstName() {
+    if (customUsedName && customUsedName.trim()) {
+      return customUsedName.trim();
+    }
+    const fullName = currentUser?.name || currentUser?.email || "Shyam";
+    const firstName = fullName.trim().split(/\s+/)[0] || "Shyam";
+    return firstName;
+  }
+
+  function getFormattedPreset(presetKey) {
+    const template = PRESET_FILENAMES[presetKey] || "";
+    const firstName = getUserFirstName();
+    return template.replace(/\bShyam\b/g, firstName);
+  }
+
+  // Save used name listener
+  if (saveMcqUsedNameBtn && mcqUsedNameInput) {
+    saveMcqUsedNameBtn.addEventListener("click", async () => {
+      const newName = mcqUsedNameInput.value.trim();
+      if (!newName) {
+        setStatus(mcqUsedNameStatus, "Please enter a valid name.", "error");
+        return;
+      }
+      customUsedName = newName;
+      localStorage.setItem("mcq_used_name", newName);
+
+      if (currentUser) {
+        try {
+          setStatus(mcqUsedNameStatus, "Saving name...", "info");
+          const res = await fetch("/api/user/update-name", {
+            method: "POST",
+            headers: getAuthHeaders(),
+            body: JSON.stringify({ name: newName })
+          });
+          if (res.ok) {
+            const data = await res.json();
+            if (data.user) {
+              currentUser = data.user;
+              if (userNameDisplayEl) userNameDisplayEl.textContent = currentUser.name;
+            }
+            setStatus(mcqUsedNameStatus, "Name saved!", "success");
+          } else {
+            setStatus(mcqUsedNameStatus, "Name saved locally.", "success");
+          }
+        } catch (_) {
+          setStatus(mcqUsedNameStatus, "Name saved locally.", "success");
+        }
+      } else {
+        setStatus(mcqUsedNameStatus, "Name saved locally.", "success");
+      }
+
+      setTimeout(() => {
+        setStatus(mcqUsedNameStatus, "", "");
+      }, 3000);
+    });
+  }
+
+  function updateDownloadButtonState() {
+    if (!downloadMultiDocxBtn) return;
+    const hasQuestions = multiQuestions.length > 0;
+    const filenameVal = multiDocxFilenameInput ? multiDocxFilenameInput.value.trim() : "";
+    const hasRenameFormat = filenameVal.length > 0;
+
+    const isReady = hasQuestions && hasRenameFormat;
+    downloadMultiDocxBtn.disabled = !isReady;
+
+    if (!hasQuestions) {
+      downloadMultiDocxBtn.title = "Add at least one question to enable download";
+    } else if (!hasRenameFormat) {
+      downloadMultiDocxBtn.title = "Select or type a rename format for document file name to enable download";
+    } else {
+      downloadMultiDocxBtn.title = "Download combined .docx document";
+    }
+  }
+
+  if (multiDocxFilenameInput) {
+    multiDocxFilenameInput.addEventListener("input", updateDownloadButtonState);
+    multiDocxFilenameInput.addEventListener("change", updateDownloadButtonState);
+  }
+
+  // Filename preset buttons listener
+  document.querySelectorAll(".preset-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const presetKey = btn.dataset.preset;
+      const target = btn.dataset.target;
+      const formatted = getFormattedPreset(presetKey);
+
+      if (target === "single" && singleDocxFilenameInput) {
+        singleDocxFilenameInput.value = formatted;
+      } else if (target === "multi" && multiDocxFilenameInput) {
+        multiDocxFilenameInput.value = formatted;
+      }
+
+      const parentGroup = btn.closest(".filename-presets-group");
+      if (parentGroup) {
+        parentGroup.querySelectorAll(".preset-btn").forEach((b) => b.classList.remove("is-selected"));
+        btn.classList.add("is-selected");
+      }
+
+      updateDownloadButtonState();
+    });
+  });
+
+  // Mode Switch Listeners
+  if (mcqModeSingleBtn && mcqModeMultiBtn) {
+    mcqModeSingleBtn.addEventListener("click", () => {
+      mcqMode = "single";
+      mcqModeSingleBtn.classList.add("is-active");
+      mcqModeMultiBtn.classList.remove("is-active");
+
+      if (singleFilenameBox) singleFilenameBox.style.display = "none";
+      if (mcqUserNameCard) mcqUserNameCard.classList.add("is-hidden");
+      if (multiDocPanel) multiDocPanel.classList.add("is-hidden");
+
+      if (generateBtn) {
+        const label = generateBtn.querySelector(".generate-btn__label");
+        if (label) label.textContent = "Generate .docx";
+      }
+    });
+
+    mcqModeMultiBtn.addEventListener("click", () => {
+      mcqMode = "multi";
+      mcqModeMultiBtn.classList.add("is-active");
+      mcqModeSingleBtn.classList.remove("is-active");
+
+      if (singleFilenameBox) singleFilenameBox.style.display = "none";
+      if (mcqUserNameCard && currentUser) mcqUserNameCard.classList.remove("is-hidden");
+      if (multiDocPanel) multiDocPanel.classList.remove("is-hidden");
+
+      if (generateBtn) {
+        const label = generateBtn.querySelector(".generate-btn__label");
+        if (label) label.textContent = "Add Question to Document";
+      }
+    });
+  }
+
+  // Render Multi-Questions List
+  function renderMultiQuestionsList() {
+    if (!multiDocCountEl || !multiQuestionsListEl) return;
+
+    multiDocCountEl.textContent = `${multiQuestions.length} Question${multiQuestions.length === 1 ? "" : "s"}`;
+
+    if (multiCountBadge) {
+      multiCountBadge.textContent = multiQuestions.length;
+      multiCountBadge.style.display = multiQuestions.length > 0 ? "inline-block" : "none";
+    }
+
+    updateDownloadButtonState();
+
+    // Update Summary Stats Card
+    if (statsTotalCountEl) {
+      statsTotalCountEl.textContent = multiQuestions.length;
+    }
+
+    if (statsTypeCountsEl) {
+      const counts = { normal: 0, statement: 0, code: 0 };
+      multiQuestions.forEach((q) => {
+        const type = (q.qtype || "normal").toLowerCase();
+        counts[type] = (counts[type] || 0) + 1;
+      });
+
+      statsTypeCountsEl.innerHTML = `
+        <span class="type-badge" data-type="normal" data-active="${counts.normal > 0}">Normal: ${counts.normal}</span>
+        <span class="type-badge" data-type="statement" data-active="${counts.statement > 0}">Statement: ${counts.statement}</span>
+        <span class="type-badge" data-type="code" data-active="${counts.code > 0}">Code: ${counts.code}</span>
+      `;
+    }
+
+    if (statsPromptsListEl) {
+      if (multiQuestions.length === 0) {
+        statsPromptsListEl.innerHTML = `<span class="empty-stats-text">No questions generated in this session yet.</span>`;
+      } else {
+        statsPromptsListEl.innerHTML = multiQuestions
+          .map((item, idx) => {
+            const rawTopic = item.topic || `Question #${idx + 1}`;
+            const shortTopic = rawTopic.length > 55 ? rawTopic.slice(0, 55) + "…" : rawTopic;
+            const qtype = (item.qtype || "normal").toUpperCase();
+            return `
+              <div class="stats-item-row">
+                <span class="stats-q-num">#${idx + 1}</span>
+                <span class="stats-q-badge">${qtype}</span>
+                <span class="stats-prompt-text" title="${escapeHtml(rawTopic)}">${escapeHtml(shortTopic)}</span>
+              </div>
+            `;
+          })
+          .join("");
+      }
+    }
+
+    if (multiQuestions.length === 0) {
+      multiQuestionsListEl.innerHTML = `<p class="empty-list-msg">No questions added yet. Fill out the form above and click "Add Question to Document" to generate multiple questions for a single docx file.</p>`;
+      return;
+    }
+
+    multiQuestionsListEl.innerHTML = "";
+    multiQuestions.forEach((item, index) => {
+      const card = document.createElement("div");
+      card.className = "question-item";
+      card.setAttribute("draggable", "true");
+      card.dataset.index = index;
+
+      // Drag Grip Handle
+      const dragHandle = document.createElement("div");
+      dragHandle.className = "q-drag-handle";
+      dragHandle.title = "Drag to reorder sequence";
+      dragHandle.innerHTML = "⋮⋮";
+
+      const info = document.createElement("div");
+      info.className = "q-item-info";
+
+      const title = document.createElement("div");
+      title.className = "q-item-title";
+      const topicSnippet = (item.topic || "Question #" + (index + 1)).slice(0, 60);
+      title.textContent = `${index + 1}. ${topicSnippet}`;
+
+      const meta = document.createElement("div");
+      meta.className = "q-item-meta";
+      meta.innerHTML = `<span>Type: <strong class="q-type-tag">${item.qtype || "normal"}</strong></span>`;
+
+      info.appendChild(title);
+      info.appendChild(meta);
+
+      // Actions Group (Move Up, Move Down, Remove)
+      const actionsGroup = document.createElement("div");
+      actionsGroup.className = "q-actions-group";
+
+      const moveUpBtn = document.createElement("button");
+      moveUpBtn.type = "button";
+      moveUpBtn.className = "q-move-btn";
+      moveUpBtn.innerHTML = "▲";
+      moveUpBtn.title = "Move Up";
+      moveUpBtn.disabled = index === 0;
+      moveUpBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (index > 0) {
+          const temp = multiQuestions[index - 1];
+          multiQuestions[index - 1] = multiQuestions[index];
+          multiQuestions[index] = temp;
+          renderMultiQuestionsList();
+        }
+      });
+
+      const moveDownBtn = document.createElement("button");
+      moveDownBtn.type = "button";
+      moveDownBtn.className = "q-move-btn";
+      moveDownBtn.innerHTML = "▼";
+      moveDownBtn.title = "Move Down";
+      moveDownBtn.disabled = index === multiQuestions.length - 1;
+      moveDownBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (index < multiQuestions.length - 1) {
+          const temp = multiQuestions[index + 1];
+          multiQuestions[index + 1] = multiQuestions[index];
+          multiQuestions[index] = temp;
+          renderMultiQuestionsList();
+        }
+      });
+
+      const removeBtn = document.createElement("button");
+      removeBtn.type = "button";
+      removeBtn.className = "q-remove-btn";
+      removeBtn.innerHTML = "✖";
+      removeBtn.title = "Remove question";
+      removeBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        multiQuestions.splice(index, 1);
+        renderMultiQuestionsList();
+      });
+
+      actionsGroup.appendChild(moveUpBtn);
+      actionsGroup.appendChild(moveDownBtn);
+      actionsGroup.appendChild(removeBtn);
+
+      // Drag and Drop Events
+      card.addEventListener("dragstart", (e) => {
+        e.dataTransfer.effectAllowed = "move";
+        e.dataTransfer.setData("text/plain", index.toString());
+        card.classList.add("is-dragging");
+      });
+
+      card.addEventListener("dragend", () => {
+        card.classList.remove("is-dragging");
+        document.querySelectorAll(".question-item").forEach((c) => c.classList.remove("drag-over"));
+      });
+
+      card.addEventListener("dragover", (e) => {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "move";
+        card.classList.add("drag-over");
+      });
+
+      card.addEventListener("dragleave", () => {
+        card.classList.remove("drag-over");
+      });
+
+      card.addEventListener("drop", (e) => {
+        e.preventDefault();
+        card.classList.remove("drag-over");
+        const fromIndex = parseInt(e.dataTransfer.getData("text/plain"), 10);
+        const toIndex = index;
+        if (!isNaN(fromIndex) && fromIndex !== toIndex && fromIndex >= 0 && fromIndex < multiQuestions.length) {
+          const [movedItem] = multiQuestions.splice(fromIndex, 1);
+          multiQuestions.splice(toIndex, 0, movedItem);
+          renderMultiQuestionsList();
+        }
+      });
+
+      card.appendChild(dragHandle);
+      card.appendChild(info);
+      card.appendChild(actionsGroup);
+      multiQuestionsListEl.appendChild(card);
+    });
+  }
+
+  if (clearMultiDocBtn) {
+    clearMultiDocBtn.addEventListener("click", () => {
+      if (multiQuestions.length === 0) return;
+      if (confirm("Are you sure you want to clear all added questions from this session?")) {
+        multiQuestions = [];
+        renderMultiQuestionsList();
+        setStatus(statusEl, "Cleared session questions.", "info");
+      }
+    });
+  }
+
   // Generator Handler
   async function handleGenerate(event) {
     event.preventDefault();
@@ -872,51 +1256,147 @@
     }
 
     setLoading(true);
-    setStatus(statusEl, "Generating question document…", "info");
 
-    try {
-      const response = await fetch("/api/generate", {
-        method: "POST",
-        headers: getAuthHeaders(),
-        body: JSON.stringify({ apiKey, topic, model, qtype }),
-      });
+    if (mcqMode === "multi") {
+      setStatus(statusEl, "Generating question to add to document...", "info");
 
-      if (!response.ok) {
-        let message = `Request failed (${response.status}).`;
-        try {
-          const data = await response.json();
-          if (data && data.error) message = data.error;
-        } catch (_) {}
-        setStatus(statusEl, message, "error");
-        return;
+      try {
+        const response = await fetch("/api/generate", {
+          method: "POST",
+          headers: getAuthHeaders(),
+          body: JSON.stringify({ apiKey, topic, model, qtype, returnJson: true }),
+        });
+
+        if (!response.ok) {
+          let message = `Request failed (${response.status}).`;
+          try {
+            const data = await response.json();
+            if (data && data.error) message = data.error;
+          } catch (_) {}
+          setStatus(statusEl, message, "error");
+          return;
+        }
+
+        const data = await response.json();
+        if (data.success && data.resdict) {
+          multiQuestions.push({
+            resdict: data.resdict,
+            qtype: data.qtype || qtype,
+            topic: topic
+          });
+          renderMultiQuestionsList();
+          setStatus(statusEl, `Added Question #${multiQuestions.length} to session! You can add more or download below.`, "success");
+          refreshKeyUsage(apiKey);
+        } else {
+          setStatus(statusEl, "Failed to generate question data.", "error");
+        }
+      } catch (err) {
+        setStatus(statusEl, "Couldn't reach the server. Check your connection.", "error");
+      } finally {
+        setLoading(false);
       }
 
-      const blob = await response.blob();
-      const filename = filenameFromResponse(response, "question.docx");
-      const url = URL.createObjectURL(blob);
+    } else {
+      // Single Question Mode
+      setStatus(statusEl, "Generating question document...", "info");
+      const filename = singleDocxFilenameInput ? singleDocxFilenameInput.value.trim() : "";
 
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = filename;
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      URL.revokeObjectURL(url);
+      try {
+        const response = await fetch("/api/generate", {
+          method: "POST",
+          headers: getAuthHeaders(),
+          body: JSON.stringify({ apiKey, topic, model, qtype, filename }),
+        });
 
-      setStatus(statusEl, `Downloaded ${filename}`, "success");
-      refreshKeyUsage(apiKey);
-    } catch (err) {
-      setStatus(
-        statusEl,
-        "Couldn't reach the server. Check your connection.",
-        "error"
-      );
-    } finally {
-      setLoading(false);
+        if (!response.ok) {
+          let message = `Request failed (${response.status}).`;
+          try {
+            const data = await response.json();
+            if (data && data.error) message = data.error;
+          } catch (_) {}
+          setStatus(statusEl, message, "error");
+          return;
+        }
+
+        const blob = await response.blob();
+        const downloadedFilename = filenameFromResponse(response, "question.docx");
+        const url = URL.createObjectURL(blob);
+
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = downloadedFilename;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        URL.revokeObjectURL(url);
+
+        setStatus(statusEl, `Downloaded ${downloadedFilename}`, "success");
+        refreshKeyUsage(apiKey);
+      } catch (err) {
+        setStatus(statusEl, "Couldn't reach the server. Check your connection.", "error");
+      } finally {
+        setLoading(false);
+      }
     }
   }
 
   mcqForm.addEventListener("submit", handleGenerate);
+
+  // Download Multi-Question Combined DOCX Handler
+  if (downloadMultiDocxBtn) {
+    downloadMultiDocxBtn.addEventListener("click", async () => {
+      if (multiQuestions.length === 0) return;
+
+      const apiKey = getUserApiKey();
+      const customFilename = multiDocxFilenameInput ? multiDocxFilenameInput.value.trim() : "";
+
+      downloadMultiDocxBtn.disabled = true;
+      downloadMultiDocxBtn.classList.add("is-loading");
+      setStatus(statusEl, "Building combined DOCX document...", "info");
+
+      try {
+        const response = await fetch("/api/generate-multi-docx", {
+          method: "POST",
+          headers: getAuthHeaders(),
+          body: JSON.stringify({
+            questions: multiQuestions,
+            filename: customFilename,
+            apiKey
+          }),
+        });
+
+        if (!response.ok) {
+          let message = `Request failed (${response.status}).`;
+          try {
+            const data = await response.json();
+            if (data && data.error) message = data.error;
+          } catch (_) {}
+          setStatus(statusEl, message, "error");
+          return;
+        }
+
+        const blob = await response.blob();
+        const downloadedFilename = filenameFromResponse(response, "MCQ_Combined_Document.docx");
+        const url = URL.createObjectURL(blob);
+
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = downloadedFilename;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        URL.revokeObjectURL(url);
+
+        setStatus(statusEl, `Downloaded ${downloadedFilename} (${multiQuestions.length} questions)`, "success");
+        refreshKeyUsage(apiKey);
+      } catch (err) {
+        setStatus(statusEl, "Failed to download combined document.", "error");
+      } finally {
+        downloadMultiDocxBtn.classList.remove("is-loading");
+        updateDownloadButtonState();
+      }
+    });
+  }
 
   // Translator Handler
   async function handleTranslate(event) {
@@ -1860,7 +2340,10 @@
       const apiKey = getUserApiKey();
 
       try {
-        if (docxTranslateBtn) docxTranslateBtn.disabled = true;
+        if (docxTranslateBtn) {
+          docxTranslateBtn.disabled = true;
+          docxTranslateBtn.classList.add("is-loading");
+        }
         setStatus(docxStatusEl, "Reading document and sending paragraphs to Gemini API...", "info");
 
         const docxTypeInput = document.querySelector('input[name="docxType"]:checked');
@@ -1919,7 +2402,10 @@
       } catch (err) {
         setStatus(docxStatusEl, err.message || "Failed to translate document.", "error");
       } finally {
-        if (docxTranslateBtn && selectedDocxFile) docxTranslateBtn.disabled = false;
+        if (docxTranslateBtn) {
+          docxTranslateBtn.classList.remove("is-loading");
+          if (selectedDocxFile) docxTranslateBtn.disabled = false;
+        }
       }
     });
   }
