@@ -51,6 +51,9 @@ app.use(cookieParser());
 const PROJECT_ROOT = process.cwd();
 app.use("/static", express.static(path.join(PROJECT_ROOT, "static")));
 app.use(express.static(PROJECT_ROOT));
+app.get("/favicon.ico", (req: Request, res: Response) => {
+  res.sendFile(path.join(PROJECT_ROOT, "static", "favicon.png"));
+});
 const TEMPLATES_DIR = path.join(PROJECT_ROOT, "templates");
 const PROMPT_PATH = path.join(PROJECT_ROOT, "prompt.txt");
 const PENDING_VOCAB_PATH = path.join(PROJECT_ROOT, "pending_vocab.json");
