@@ -1928,7 +1928,29 @@
     docx: "gemini-3.6-flash",
   };
 
-  async function fetchModels() {
+  const userManualModelSelection = {
+    generator: false,
+    translator: false,
+    docx: false,
+  };
+
+  if (modelInput) {
+    modelInput.addEventListener("change", () => {
+      userManualModelSelection.generator = true;
+    });
+  }
+  if (translateModelInput) {
+    translateModelInput.addEventListener("change", () => {
+      userManualModelSelection.translator = true;
+    });
+  }
+  if (docxModelInput) {
+    docxModelInput.addEventListener("change", () => {
+      userManualModelSelection.docx = true;
+    });
+  }
+
+  async function fetchModels(forceDefaults = false) {
     try {
       const res = await fetch("/api/models");
       if (!res.ok) return;
@@ -1937,28 +1959,25 @@
         if (data.defaults) {
           currentDefaultModels = { ...currentDefaultModels, ...data.defaults };
         }
-        updateModelDropdowns(data.models, data.defaults || currentDefaultModels);
+        updateModelDropdowns(data.models, data.defaults || currentDefaultModels, forceDefaults);
         renderAdminModels(data.models);
       }
     } catch (_) {}
   }
 
-  function updateModelDropdowns(models, defaults) {
+  function updateModelDropdowns(models, defaults, forceDefaults = false) {
     if (defaults) {
       currentDefaultModels = { ...currentDefaultModels, ...defaults };
     }
     const defs = defaults || currentDefaultModels || {};
 
-    const dropdowns = [
-      { el: modelInput, defaultVal: defs.generator },
-      { el: translateModelInput, defaultVal: defs.translator },
-      { el: docxModelInput, defaultVal: defs.docx },
-      { el: adminDefaultGeneratorModel, defaultVal: defs.generator },
-      { el: adminDefaultTranslatorModel, defaultVal: defs.translator },
-      { el: adminDefaultDocxModel, defaultVal: defs.docx },
+    const toolDropdowns = [
+      { el: modelInput, defaultVal: defs.generator, feature: "generator" },
+      { el: translateModelInput, defaultVal: defs.translator, feature: "translator" },
+      { el: docxModelInput, defaultVal: defs.docx, feature: "docx" },
     ];
 
-    dropdowns.forEach(({ el, defaultVal }) => {
+    toolDropdowns.forEach(({ el, defaultVal, feature }) => {
       if (!el) return;
       const prevVal = el.value;
       el.innerHTML = "";
@@ -1978,10 +1997,44 @@
         el.appendChild(opt);
       });
 
-      // Selection logic: use previous selection if valid, otherwise fallback to configured default model
-      if (prevVal && models.includes(prevVal)) {
+      // If forceDefaults is active OR the user hasn't manually selected a custom model in this session,
+      // apply the default model configured by the admin.
+      if (!forceDefaults && userManualModelSelection[feature] && prevVal && models.includes(prevVal)) {
         el.value = prevVal;
       } else if (defaultVal && models.includes(defaultVal)) {
+        el.value = defaultVal;
+      } else if (models.length > 0) {
+        el.value = models[0];
+      }
+    });
+
+    // Admin default pre-selected configuration dropdowns
+    const adminDropdowns = [
+      { el: adminDefaultGeneratorModel, defaultVal: defs.generator },
+      { el: adminDefaultTranslatorModel, defaultVal: defs.translator },
+      { el: adminDefaultDocxModel, defaultVal: defs.docx },
+    ];
+
+    adminDropdowns.forEach(({ el, defaultVal }) => {
+      if (!el) return;
+      el.innerHTML = "";
+
+      if (!models || models.length === 0) {
+        const opt = document.createElement("option");
+        opt.value = "gemini-3.6-flash";
+        opt.textContent = "gemini-3.6-flash";
+        el.appendChild(opt);
+        return;
+      }
+
+      models.forEach((m) => {
+        const opt = document.createElement("option");
+        opt.value = m;
+        opt.textContent = m;
+        el.appendChild(opt);
+      });
+
+      if (defaultVal && models.includes(defaultVal)) {
         el.value = defaultVal;
       } else if (models.length > 0) {
         el.value = models[0];
@@ -2048,7 +2101,7 @@
 
       if (adminModelNameInput) adminModelNameInput.value = "";
       renderAdminModels(data.models);
-      updateModelDropdowns(data.models, currentDefaultModels);
+      updateModelDropdowns(data.models, data.defaults || currentDefaultModels, false);
       setStatus(adminModelStatusEl, `Model "${escapeHtml(modelName)}" added successfully!`, "success");
     } catch (err) {
       setStatus(adminModelStatusEl, err.message || "Failed to add model.", "error");
@@ -2074,7 +2127,7 @@
       }
 
       renderAdminModels(data.models);
-      updateModelDropdowns(data.models, currentDefaultModels);
+      updateModelDropdowns(data.models, data.defaults || currentDefaultModels, false);
       setStatus(adminModelStatusEl, `Model "${escapeHtml(modelName)}" removed successfully!`, "success");
     } catch (err) {
       setStatus(adminModelStatusEl, err.message || "Failed to delete model.", "error");
@@ -2109,11 +2162,18 @@
         docx: data.defaults?.docx || docx,
       };
 
+      // Reset manual overrides so updated defaults reflect immediately
+      userManualModelSelection.generator = false;
+      userManualModelSelection.translator = false;
+      userManualModelSelection.docx = false;
+
       if (modelInput) modelInput.value = currentDefaultModels.generator;
       if (translateModelInput) translateModelInput.value = currentDefaultModels.translator;
       if (docxModelInput) docxModelInput.value = currentDefaultModels.docx;
 
-      setStatus(adminDefaultModelsStatusEl, "Default pre-selected models saved successfully!", "success");
+      await fetchModels(true);
+
+      setStatus(adminDefaultModelsStatusEl, "Default pre-selected models saved successfully for all users!", "success");
     } catch (err) {
       setStatus(adminDefaultModelsStatusEl, err.message || "Failed to save default models.", "error");
     }
