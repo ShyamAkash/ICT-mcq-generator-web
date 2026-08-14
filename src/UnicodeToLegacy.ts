@@ -9,7 +9,7 @@ export function ConvertToLegacy(text: string): string {
   s = s.replaceAll("%", "]");
   s = s.replaceAll("/", "$");
   s = s.replaceAll("–", "-");
-  s = s.replaceAll("?", "?");
+  s = s.replaceAll("?", "@");
   s = s.replaceAll("!", "æ");
   s = s.replaceAll("=", "}");
   s = s.replaceAll(".", "'");
