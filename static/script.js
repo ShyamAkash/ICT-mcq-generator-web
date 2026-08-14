@@ -73,7 +73,9 @@
   // Translator Elements
   const translateForm = document.getElementById("translate-form");
   const translateApiKeyInput = document.getElementById("translate-api-key");
+  const translateModelInput = document.getElementById("translate-model");
   const docxApiKeyInput = document.getElementById("docx-api-key");
+  const docxModelInput = document.getElementById("docx-model");
   const translateSourceInput = document.getElementById("translate-source");
   const translateBtn = document.getElementById("translate-btn");
   const translateStatusEl = document.getElementById("translate-status");
@@ -125,6 +127,12 @@
   const adminModelNameInput = document.getElementById("admin-model-name");
   const adminModelStatusEl = document.getElementById("admin-model-status");
   const adminModelsListEl = document.getElementById("admin-models-list");
+
+  const adminDefaultModelsForm = document.getElementById("admin-default-models-form");
+  const adminDefaultGeneratorModel = document.getElementById("admin-default-generator-model");
+  const adminDefaultTranslatorModel = document.getElementById("admin-default-translator-model");
+  const adminDefaultDocxModel = document.getElementById("admin-default-docx-model");
+  const adminDefaultModelsStatusEl = document.getElementById("admin-default-models-status");
 
   let adminPromptsData = [];
   let adminTranslationStats = { users: [], guests: [], total: 0 };
@@ -905,6 +913,265 @@
   const statsTypeCountsEl = document.getElementById("stats-type-counts");
   const statsPromptsListEl = document.getElementById("stats-prompts-list");
 
+  // Question Preview Modal Elements
+  const qPreviewModal = document.getElementById("q-preview-modal");
+  const qPreviewOverlay = document.getElementById("q-preview-overlay");
+  const qPreviewCloseBtn = document.getElementById("q-preview-close");
+  const qPreviewDoneBtn = document.getElementById("q-preview-done-btn");
+  const qPreviewPrevBtn = document.getElementById("q-preview-prev-btn");
+  const qPreviewNextBtn = document.getElementById("q-preview-next-btn");
+  const qPreviewIndexBadge = document.getElementById("q-preview-index-badge");
+  const qPreviewTypeBadge = document.getElementById("q-preview-type-badge");
+  const qPreviewAnsBadge = document.getElementById("q-preview-ans-badge");
+  const qPreviewTitle = document.getElementById("q-preview-title");
+  const qPreviewBody = document.getElementById("q-preview-body");
+  const qPreviewCounter = document.getElementById("q-preview-counter");
+
+  let currentPreviewIndex = 0;
+
+  function openQuestionPreview(index) {
+    if (!qPreviewModal || multiQuestions.length === 0) return;
+    if (index < 0) index = 0;
+    if (index >= multiQuestions.length) index = multiQuestions.length - 1;
+    currentPreviewIndex = index;
+    renderQuestionPreview(currentPreviewIndex);
+    qPreviewModal.classList.remove("is-hidden");
+  }
+
+  function closeQuestionPreview() {
+    if (!qPreviewModal) return;
+    qPreviewModal.classList.add("is-hidden");
+  }
+
+  function renderQuestionPreview(index) {
+    const item = multiQuestions[index];
+    if (!item) return;
+    const resdict = item.resdict || {};
+    const qtype = (item.qtype || resdict.QType || "normal").toLowerCase();
+    const rawTopic = item.topic || `Question #${index + 1}`;
+    const ansNo = parseInt(resdict.AnsNo ?? resdict.ansNo ?? 1, 10);
+
+    if (qPreviewIndexBadge) qPreviewIndexBadge.textContent = `Question #${index + 1}`;
+    if (qPreviewTypeBadge) {
+      qPreviewTypeBadge.textContent = qtype.toUpperCase();
+      qPreviewTypeBadge.className = `q-type-tag ${qtype}`;
+    }
+    if (qPreviewAnsBadge) {
+      qPreviewAnsBadge.textContent = `Ans: Option #${ansNo || 1}`;
+    }
+    if (qPreviewTitle) {
+      qPreviewTitle.textContent = rawTopic;
+      qPreviewTitle.title = rawTopic;
+    }
+    if (qPreviewCounter) {
+      qPreviewCounter.textContent = `${index + 1} of ${multiQuestions.length}`;
+    }
+    if (qPreviewPrevBtn) {
+      qPreviewPrevBtn.disabled = index === 0;
+    }
+    if (qPreviewNextBtn) {
+      qPreviewNextBtn.disabled = index === multiQuestions.length - 1;
+    }
+
+    if (!qPreviewBody) return;
+
+    let bodyHtml = "";
+
+    // 1. Question (English)
+    const qEngText = resdict["QEng"] || resdict["Question English"] || rawTopic;
+    bodyHtml += `
+      <div class="q-preview-section">
+        <div class="q-preview-section-title">Question (English)</div>
+        <div class="q-preview-text-box">${escapeHtml(qEngText)}</div>
+      </div>
+    `;
+
+    // Code snippet (if code type or resdict.Code exists)
+    const codeSnippet = resdict["Code"] || resdict["codelines"] || "";
+    if (codeSnippet) {
+      bodyHtml += `
+        <div class="q-preview-section">
+          <div class="q-preview-section-title">Code Snippet</div>
+          <pre class="q-preview-code-block"><code>${escapeHtml(codeSnippet)}</code></pre>
+        </div>
+      `;
+    }
+
+    // Statements (if statement type or resdict.StatementsEng exists)
+    const statementsEng = resdict["StatementsEng"] || [
+      resdict["StateAEng"],
+      resdict["StateBEng"],
+      resdict["StateCEng"]
+    ].filter(Boolean);
+
+    if (statementsEng && statementsEng.length > 0) {
+      const labels = ["(A)", "(B)", "(C)", "(D)", "(E)"];
+      const statementsItems = statementsEng
+        .map((stmt, sIdx) => `
+          <div class="q-preview-statement-item">
+            <span class="q-statement-label">${labels[sIdx] || `(${sIdx + 1})`}</span>
+            <span>${escapeHtml(stmt || "")}</span>
+          </div>
+        `)
+        .join("");
+
+      bodyHtml += `
+        <div class="q-preview-section">
+          <div class="q-preview-section-title">Statements (English)</div>
+          <div class="q-preview-statements-list">
+            ${statementsItems}
+          </div>
+        </div>
+      `;
+    }
+
+    // 2. Answer Options (English)
+    const answersEng = resdict["AnswersEng"] || [
+      resdict["Answer 1 English"],
+      resdict["Answer 2 English"],
+      resdict["Answer 3 English"],
+      resdict["Answer 4 English"],
+      resdict["Answer 5 English"]
+    ];
+
+    if (answersEng && answersEng.length > 0) {
+      const optionsHtml = answersEng
+        .map((opt, oIdx) => {
+          const optNum = oIdx + 1;
+          const isCorrect = optNum === ansNo;
+          return `
+            <div class="q-preview-option-item ${isCorrect ? "is-correct" : ""}">
+              <span class="q-option-num">(${optNum})</span>
+              <span class="q-option-text">${escapeHtml(opt || `Option ${optNum}`)}</span>
+              ${isCorrect ? '<span class="q-correct-tag">&#10003; Correct Answer</span>' : ""}
+            </div>
+          `;
+        })
+        .join("");
+
+      bodyHtml += `
+        <div class="q-preview-section">
+          <div class="q-preview-section-title">Answer Options (English)</div>
+          <div class="q-preview-options-list">
+            ${optionsHtml}
+          </div>
+        </div>
+      `;
+    }
+
+    // 3. Explanation (English)
+    const explEng = resdict["ExplEng"] || resdict["ExplanationEnglish"] || [
+      resdict["Explanation 1 English"] || resdict["ExplAEng"],
+      resdict["Explanation 2 English"] || resdict["ExplBEng"],
+      resdict["Explanation 3 English"] || resdict["ExplCEng"],
+      resdict["Explanation 4 English"],
+      resdict["Explanation 5 English"]
+    ].filter(Boolean);
+
+    let explContentHtml = "";
+    if (Array.isArray(explEng)) {
+      explContentHtml = explEng
+        .map((itemExp, eIdx) => {
+          if (!itemExp) return "";
+          let label = `Option (${eIdx + 1})`;
+          if (qtype === "statement") {
+            const letters = ["A", "B", "C", "D", "E"];
+            label = `Statement (${letters[eIdx] || eIdx + 1})`;
+          }
+          return `
+            <div class="q-preview-expl-item">
+              <span class="q-preview-expl-label">${label}</span>
+              <div>${escapeHtml(itemExp)}</div>
+            </div>
+          `;
+        })
+        .join("");
+    } else if (typeof explEng === "string" && explEng.trim()) {
+      explContentHtml = `
+        <div class="q-preview-expl-item">
+          <div>${escapeHtml(explEng)}</div>
+        </div>
+      `;
+    }
+
+    if (explContentHtml) {
+      bodyHtml += `
+        <div class="q-preview-section">
+          <div class="q-preview-section-title">Explanation (English)</div>
+          <div class="q-preview-expl-card">
+            ${explContentHtml}
+          </div>
+        </div>
+      `;
+    }
+
+    // 4. Sinhala Translation section (collapsible)
+    const qSinText = resdict["QSin"] || resdict["Question Sinhala"] || "";
+    const answersSin = resdict["AnswersSin"] || [];
+    if (qSinText || (answersSin && answersSin.length > 0)) {
+      bodyHtml += `
+        <div class="q-preview-section">
+          <button type="button" class="q-preview-sinhala-toggle" id="q-preview-sinhala-btn">
+            <span>Sinhala Translation Data (සිංහල)</span>
+            <span id="q-preview-sinhala-arrow">&#9660;</span>
+          </button>
+          <div id="q-preview-sinhala-box" class="q-preview-sinhala-box is-hidden">
+            ${qSinText ? `<div><strong>ප්‍රශ්නය:</strong> ${escapeHtml(qSinText)}</div>` : ""}
+            ${answersSin && answersSin.length > 0 ? `
+              <div style="margin-top: 6px;">
+                <strong>පිළිතුරු:</strong>
+                <ol style="margin: 4px 0 0 18px; padding: 0;">
+                  ${answersSin.map((sAns) => `<li>${escapeHtml(sAns || "")}</li>`).join("")}
+                </ol>
+              </div>
+            ` : ""}
+          </div>
+        </div>
+      `;
+    }
+
+    qPreviewBody.innerHTML = bodyHtml;
+
+    // Attach Sinhala toggle listener
+    const sinhalaToggleBtn = document.getElementById("q-preview-sinhala-btn");
+    const sinhalaBox = document.getElementById("q-preview-sinhala-box");
+    const sinhalaArrow = document.getElementById("q-preview-sinhala-arrow");
+    if (sinhalaToggleBtn && sinhalaBox) {
+      sinhalaToggleBtn.addEventListener("click", () => {
+        const isHidden = sinhalaBox.classList.toggle("is-hidden");
+        if (sinhalaArrow) {
+          sinhalaArrow.innerHTML = isHidden ? "&#9660;" : "&#9650;";
+        }
+      });
+    }
+  }
+
+  // Modal event listeners
+  if (qPreviewCloseBtn) qPreviewCloseBtn.addEventListener("click", closeQuestionPreview);
+  if (qPreviewDoneBtn) qPreviewDoneBtn.addEventListener("click", closeQuestionPreview);
+  if (qPreviewOverlay) qPreviewOverlay.addEventListener("click", closeQuestionPreview);
+  if (qPreviewPrevBtn) {
+    qPreviewPrevBtn.addEventListener("click", () => {
+      if (currentPreviewIndex > 0) openQuestionPreview(currentPreviewIndex - 1);
+    });
+  }
+  if (qPreviewNextBtn) {
+    qPreviewNextBtn.addEventListener("click", () => {
+      if (currentPreviewIndex < multiQuestions.length - 1) openQuestionPreview(currentPreviewIndex + 1);
+    });
+  }
+  document.addEventListener("keydown", (e) => {
+    if (qPreviewModal && !qPreviewModal.classList.contains("is-hidden")) {
+      if (e.key === "Escape") {
+        closeQuestionPreview();
+      } else if (e.key === "ArrowLeft" && currentPreviewIndex > 0) {
+        openQuestionPreview(currentPreviewIndex - 1);
+      } else if (e.key === "ArrowRight" && currentPreviewIndex < multiQuestions.length - 1) {
+        openQuestionPreview(currentPreviewIndex + 1);
+      }
+    }
+  });
+
   function getUserFirstName() {
     if (customUsedName && customUsedName.trim()) {
       return customUsedName.trim();
@@ -1083,14 +1350,22 @@
             const shortTopic = rawTopic.length > 55 ? rawTopic.slice(0, 55) + "…" : rawTopic;
             const qtype = (item.qtype || "normal").toUpperCase();
             return `
-              <div class="stats-item-row">
+              <div class="stats-item-row" data-index="${idx}" title="Click to preview question #${idx + 1}">
                 <span class="stats-q-num">#${idx + 1}</span>
                 <span class="stats-q-badge">${qtype}</span>
-                <span class="stats-prompt-text" title="${escapeHtml(rawTopic)}">${escapeHtml(shortTopic)}</span>
+                <span class="stats-prompt-text">${escapeHtml(shortTopic)}</span>
+                <span style="font-size: 11px; opacity: 0.6; margin-left: auto;">&#128065; Preview</span>
               </div>
             `;
           })
           .join("");
+
+        statsPromptsListEl.querySelectorAll(".stats-item-row").forEach((row) => {
+          row.addEventListener("click", () => {
+            const idx = parseInt(row.dataset.index, 10);
+            if (!isNaN(idx)) openQuestionPreview(idx);
+          });
+        });
       }
     }
 
@@ -1114,6 +1389,10 @@
 
       const info = document.createElement("div");
       info.className = "q-item-info";
+      info.title = "Click to preview question details";
+      info.addEventListener("click", () => {
+        openQuestionPreview(index);
+      });
 
       const title = document.createElement("div");
       title.className = "q-item-title";
@@ -1122,14 +1401,27 @@
 
       const meta = document.createElement("div");
       meta.className = "q-item-meta";
-      meta.innerHTML = `<span>Type: <strong class="q-type-tag">${item.qtype || "normal"}</strong></span>`;
+      meta.innerHTML = `
+        <span>Type: <strong class="q-type-tag">${item.qtype || "normal"}</strong></span>
+        <span style="color: var(--accent); font-size: 11px; opacity: 0.85;">&#128065; Click to preview</span>
+      `;
 
       info.appendChild(title);
       info.appendChild(meta);
 
-      // Actions Group (Move Up, Move Down, Remove)
+      // Actions Group (Preview, Move Up, Move Down, Remove)
       const actionsGroup = document.createElement("div");
       actionsGroup.className = "q-actions-group";
+
+      const previewBtn = document.createElement("button");
+      previewBtn.type = "button";
+      previewBtn.className = "q-preview-btn";
+      previewBtn.innerHTML = "&#128065; Preview";
+      previewBtn.title = "Preview question details";
+      previewBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        openQuestionPreview(index);
+      });
 
       const moveUpBtn = document.createElement("button");
       moveUpBtn.type = "button";
@@ -1174,6 +1466,7 @@
         renderMultiQuestionsList();
       });
 
+      actionsGroup.appendChild(previewBtn);
       actionsGroup.appendChild(moveUpBtn);
       actionsGroup.appendChild(moveDownBtn);
       actionsGroup.appendChild(removeBtn);
@@ -1404,7 +1697,7 @@
 
     const apiKey = (translateApiKeyInput ? translateApiKeyInput.value.trim() : "") || getUserApiKey();
     const text = translateSourceInput ? translateSourceInput.value.trim() : "";
-    const model = (modelInput && modelInput.value.trim()) ? modelInput.value.trim() : "gemini-3.6-flash";
+    const model = (translateModelInput && translateModelInput.value.trim()) || (modelInput && modelInput.value.trim()) || "gemini-3.6-flash";
 
     if (!text) {
       setStatus(translateStatusEl, "Please enter English text to translate.", "error");
@@ -1604,41 +1897,71 @@
   }
 
   // Gemini Model Management
+  let currentDefaultModels = {
+    generator: "gemini-3.6-flash",
+    translator: "gemini-3.6-flash",
+    docx: "gemini-3.6-flash",
+  };
+
   async function fetchModels() {
     try {
       const res = await fetch("/api/models");
       if (!res.ok) return;
       const data = await res.json();
       if (data && Array.isArray(data.models)) {
-        updateModelDropdowns(data.models);
+        if (data.defaults) {
+          currentDefaultModels = { ...currentDefaultModels, ...data.defaults };
+        }
+        updateModelDropdowns(data.models, data.defaults || currentDefaultModels);
         renderAdminModels(data.models);
       }
     } catch (_) {}
   }
 
-  function updateModelDropdowns(models) {
-    if (!modelInput) return;
-    const currentVal = modelInput.value;
-    modelInput.innerHTML = "";
-    if (!models || models.length === 0) {
-      const opt = document.createElement("option");
-      opt.value = "gemini-3.6-flash";
-      opt.textContent = "gemini-3.6-flash";
-      modelInput.appendChild(opt);
-      return;
+  function updateModelDropdowns(models, defaults) {
+    if (defaults) {
+      currentDefaultModels = { ...currentDefaultModels, ...defaults };
     }
-    models.forEach((m) => {
-      const opt = document.createElement("option");
-      opt.value = m;
-      opt.textContent = m;
-      if (m === currentVal) {
-        opt.selected = true;
+    const defs = defaults || currentDefaultModels || {};
+
+    const dropdowns = [
+      { el: modelInput, defaultVal: defs.generator },
+      { el: translateModelInput, defaultVal: defs.translator },
+      { el: docxModelInput, defaultVal: defs.docx },
+      { el: adminDefaultGeneratorModel, defaultVal: defs.generator },
+      { el: adminDefaultTranslatorModel, defaultVal: defs.translator },
+      { el: adminDefaultDocxModel, defaultVal: defs.docx },
+    ];
+
+    dropdowns.forEach(({ el, defaultVal }) => {
+      if (!el) return;
+      const prevVal = el.value;
+      el.innerHTML = "";
+
+      if (!models || models.length === 0) {
+        const opt = document.createElement("option");
+        opt.value = "gemini-3.6-flash";
+        opt.textContent = "gemini-3.6-flash";
+        el.appendChild(opt);
+        return;
       }
-      modelInput.appendChild(opt);
+
+      models.forEach((m) => {
+        const opt = document.createElement("option");
+        opt.value = m;
+        opt.textContent = m;
+        el.appendChild(opt);
+      });
+
+      // Selection logic: use previous selection if valid, otherwise fallback to configured default model
+      if (prevVal && models.includes(prevVal)) {
+        el.value = prevVal;
+      } else if (defaultVal && models.includes(defaultVal)) {
+        el.value = defaultVal;
+      } else if (models.length > 0) {
+        el.value = models[0];
+      }
     });
-    if (!modelInput.value && models.length > 0) {
-      modelInput.value = models[0];
-    }
   }
 
   function renderAdminModels(models) {
@@ -1700,7 +2023,7 @@
 
       if (adminModelNameInput) adminModelNameInput.value = "";
       renderAdminModels(data.models);
-      updateModelDropdowns(data.models);
+      updateModelDropdowns(data.models, currentDefaultModels);
       setStatus(adminModelStatusEl, `Model "${escapeHtml(modelName)}" added successfully!`, "success");
     } catch (err) {
       setStatus(adminModelStatusEl, err.message || "Failed to add model.", "error");
@@ -1726,15 +2049,57 @@
       }
 
       renderAdminModels(data.models);
-      updateModelDropdowns(data.models);
+      updateModelDropdowns(data.models, currentDefaultModels);
       setStatus(adminModelStatusEl, `Model "${escapeHtml(modelName)}" removed successfully!`, "success");
     } catch (err) {
       setStatus(adminModelStatusEl, err.message || "Failed to delete model.", "error");
     }
   }
 
+  async function adminSaveDefaultModels(event) {
+    if (event) event.preventDefault();
+    const generator = adminDefaultGeneratorModel ? adminDefaultGeneratorModel.value : "gemini-3.6-flash";
+    const translator = adminDefaultTranslatorModel ? adminDefaultTranslatorModel.value : "gemini-3.6-flash";
+    const docx = adminDefaultDocxModel ? adminDefaultDocxModel.value : "gemini-3.6-flash";
+
+    try {
+      setStatus(adminDefaultModelsStatusEl, "Saving default models…", "info");
+      const headers = getAuthHeaders();
+      headers["x-admin-pass"] = "ictfromabcadmin";
+
+      const res = await fetch("/api/admin/default-models", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ generator, translator, docx }),
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || "Failed to save default models.");
+      }
+
+      currentDefaultModels = {
+        generator: data.defaults?.generator || generator,
+        translator: data.defaults?.translator || translator,
+        docx: data.defaults?.docx || docx,
+      };
+
+      if (modelInput) modelInput.value = currentDefaultModels.generator;
+      if (translateModelInput) translateModelInput.value = currentDefaultModels.translator;
+      if (docxModelInput) docxModelInput.value = currentDefaultModels.docx;
+
+      setStatus(adminDefaultModelsStatusEl, "Default pre-selected models saved successfully!", "success");
+    } catch (err) {
+      setStatus(adminDefaultModelsStatusEl, err.message || "Failed to save default models.", "error");
+    }
+  }
+
   if (adminAddModelForm) {
     adminAddModelForm.addEventListener("submit", adminAddModel);
+  }
+
+  if (adminDefaultModelsForm) {
+    adminDefaultModelsForm.addEventListener("submit", adminSaveDefaultModels);
   }
 
   // Admin Data & Logic
@@ -1757,7 +2122,7 @@
       const users = usersRes.ok ? await usersRes.json() : [];
       adminPromptsData = promptsRes.ok ? await promptsRes.json() : [];
       adminTranslationStats = transRes.ok ? await transRes.json() : { users: [], guests: [], total: 0 };
-      const modelsData = modelsRes.ok ? await modelsRes.json() : { models: [] };
+      const modelsData = modelsRes.ok ? await modelsRes.json() : { models: [], defaults: null };
 
       renderAdminPending(pending);
       renderAdminActive(active);
@@ -1765,7 +2130,10 @@
       renderAdminGuests();
       renderAdminPrompts();
       renderAdminModels(modelsData.models || []);
-      updateModelDropdowns(modelsData.models || []);
+      if (modelsData.defaults) {
+        currentDefaultModels = { ...currentDefaultModels, ...modelsData.defaults };
+      }
+      updateModelDropdowns(modelsData.models || [], modelsData.defaults || currentDefaultModels);
     } catch (err) {
       setStatus(adminStatusEl, "Error loading admin data.", "error");
     }
@@ -2348,10 +2716,12 @@
 
         const docxTypeInput = document.querySelector('input[name="docxType"]:checked');
         const docxType = docxTypeInput ? docxTypeInput.value : "question";
+        const model = (docxModelInput && docxModelInput.value.trim()) || (modelInput && modelInput.value.trim()) || "gemini-3.6-flash";
 
         const formData = new FormData();
         formData.append("file", selectedDocxFile);
         formData.append("docxType", docxType);
+        formData.append("model", model);
         if (apiKey) formData.append("apiKey", apiKey);
 
         const headers = getAuthHeaders();

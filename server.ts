@@ -66,6 +66,7 @@ const TMP_PROMPT_HISTORY_PATH = path.join("/tmp", "prompt_history.json");
 const TMP_TRANSLATION_HISTORY_PATH = path.join("/tmp", "translation_history.json");
 const TMP_API_KEY_USAGE_PATH = path.join("/tmp", "api_key_usage.json");
 const TMP_MODELS_PATH = path.join("/tmp", "models.json");
+const TMP_DEFAULT_MODELS_PATH = path.join("/tmp", "default_models.json");
 
 const KV_URL = process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL;
 const KV_TOKEN = process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN;
@@ -151,6 +152,12 @@ async function ensurePgTables(): Promise<boolean> {
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
     `;
+    await sql`
+      CREATE TABLE IF NOT EXISTS gemini_default_models (
+        feature VARCHAR(50) PRIMARY KEY,
+        model_name VARCHAR(100) NOT NULL
+      );
+    `;
     pgInitAttempted = true;
     return true;
   } catch (err) {
@@ -166,6 +173,18 @@ let memoryPromptHistory: Array<any> = [];
 let memoryTranslationHistory: Array<any> = [];
 let memoryApiKeyUsage: Record<string, number> = {};
 let memoryModels: string[] = ["gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite"];
+
+interface DefaultModelsConfig {
+  generator: string;
+  translator: string;
+  docx: string;
+}
+
+let memoryDefaultModels: DefaultModelsConfig = {
+  generator: "gemini-3.6-flash",
+  translator: "gemini-3.6-flash",
+  docx: "gemini-3.6-flash",
+};
 
 async function loadFallbackData() {
   try {
@@ -193,6 +212,17 @@ async function loadFallbackData() {
     const parsed = JSON.parse(mData);
     if (Array.isArray(parsed) && parsed.length > 0) {
       memoryModels = parsed;
+    }
+  } catch {}
+  try {
+    const dmData = await fs.promises.readFile(TMP_DEFAULT_MODELS_PATH, "utf-8");
+    const parsedDm = JSON.parse(dmData);
+    if (parsedDm && typeof parsedDm === "object") {
+      memoryDefaultModels = {
+        generator: parsedDm.generator || "gemini-3.6-flash",
+        translator: parsedDm.translator || "gemini-3.6-flash",
+        docx: parsedDm.docx || "gemini-3.6-flash",
+      };
     }
   } catch {}
 }
@@ -228,18 +258,93 @@ async function saveFallbackModels() {
     await fs.promises.writeFile(TMP_MODELS_PATH, JSON.stringify(memoryModels, null, 2));
   } catch {}
 }
+async function saveFallbackDefaultModels() {
+  try {
+    await fs.promises.writeFile(TMP_DEFAULT_MODELS_PATH, JSON.stringify(memoryDefaultModels, null, 2));
+  } catch {}
+}
+
+async function getDefaultModels(): Promise<DefaultModelsConfig> {
+  const allowed = await getAdminModels();
+  const fallbackModel = allowed[0] || "gemini-3.6-flash";
+
+  let result: DefaultModelsConfig = {
+    generator: memoryDefaultModels.generator || fallbackModel,
+    translator: memoryDefaultModels.translator || fallbackModel,
+    docx: memoryDefaultModels.docx || fallbackModel,
+  };
+
+  if (isPostgresConfigured()) {
+    try {
+      await ensurePgTables();
+      const { rows } = await sql`SELECT feature, model_name FROM gemini_default_models;`;
+      if (rows && rows.length > 0) {
+        for (const r of rows) {
+          if (r.feature === "generator") result.generator = r.model_name;
+          if (r.feature === "translator") result.translator = r.model_name;
+          if (r.feature === "docx") result.docx = r.model_name;
+        }
+      } else {
+        // Initialize table with defaults
+        await sql`INSERT INTO gemini_default_models (feature, model_name) VALUES ('generator', ${result.generator}) ON CONFLICT (feature) DO UPDATE SET model_name = EXCLUDED.model_name;`;
+        await sql`INSERT INTO gemini_default_models (feature, model_name) VALUES ('translator', ${result.translator}) ON CONFLICT (feature) DO UPDATE SET model_name = EXCLUDED.model_name;`;
+        await sql`INSERT INTO gemini_default_models (feature, model_name) VALUES ('docx', ${result.docx}) ON CONFLICT (feature) DO UPDATE SET model_name = EXCLUDED.model_name;`;
+      }
+    } catch (err) {
+      console.error("Error fetching default models from Postgres:", err);
+    }
+  }
+
+  // Ensure chosen defaults exist in allowed list
+  if (!allowed.includes(result.generator)) result.generator = fallbackModel;
+  if (!allowed.includes(result.translator)) result.translator = fallbackModel;
+  if (!allowed.includes(result.docx)) result.docx = fallbackModel;
+
+  return result;
+}
+
+async function setDefaultModels(updates: Partial<DefaultModelsConfig>): Promise<DefaultModelsConfig> {
+  const allowed = await getAdminModels();
+  const current = await getDefaultModels();
+
+  if (updates.generator && allowed.includes(updates.generator.trim())) {
+    current.generator = updates.generator.trim();
+  }
+  if (updates.translator && allowed.includes(updates.translator.trim())) {
+    current.translator = updates.translator.trim();
+  }
+  if (updates.docx && allowed.includes(updates.docx.trim())) {
+    current.docx = updates.docx.trim();
+  }
+
+  if (isPostgresConfigured()) {
+    try {
+      await ensurePgTables();
+      await sql`INSERT INTO gemini_default_models (feature, model_name) VALUES ('generator', ${current.generator}) ON CONFLICT (feature) DO UPDATE SET model_name = EXCLUDED.model_name;`;
+      await sql`INSERT INTO gemini_default_models (feature, model_name) VALUES ('translator', ${current.translator}) ON CONFLICT (feature) DO UPDATE SET model_name = EXCLUDED.model_name;`;
+      await sql`INSERT INTO gemini_default_models (feature, model_name) VALUES ('docx', ${current.docx}) ON CONFLICT (feature) DO UPDATE SET model_name = EXCLUDED.model_name;`;
+    } catch (err) {
+      console.error("Error setting default models in Postgres:", err);
+    }
+  }
+
+  memoryDefaultModels = { ...current };
+  await saveFallbackDefaultModels();
+
+  return current;
+}
 
 async function getAdminModels(): Promise<string[]> {
   if (isPostgresConfigured()) {
     try {
       await ensurePgTables();
-      const { rows } = await sql`SELECT name FROM gemini_models ORDER BY created_at ASC;`;
+      const { rows } = await sql`SELECT name FROM gemini_models ORDER BY created_at DESC;`;
       if (rows && rows.length > 0) {
         return rows.map((r: any) => r.name);
       } else {
         const defaults = ["gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite"];
-        for (const m of defaults) {
-          await sql`INSERT INTO gemini_models (name) VALUES (${m}) ON CONFLICT DO NOTHING;`;
+        for (let i = defaults.length - 1; i >= 0; i--) {
+          await sql`INSERT INTO gemini_models (name) VALUES (${defaults[i]}) ON CONFLICT DO NOTHING;`;
         }
         return defaults;
       }
@@ -262,16 +367,15 @@ async function addAdminModel(modelName: string): Promise<string[]> {
   if (isPostgresConfigured()) {
     try {
       await ensurePgTables();
-      await sql`INSERT INTO gemini_models (name) VALUES (${clean}) ON CONFLICT DO NOTHING;`;
+      await sql`INSERT INTO gemini_models (name, created_at) VALUES (${clean}, CURRENT_TIMESTAMP)
+        ON CONFLICT (name) DO UPDATE SET created_at = CURRENT_TIMESTAMP;`;
     } catch (err) {
       console.error("Error adding model to Postgres:", err);
     }
   }
 
-  if (!memoryModels.includes(clean)) {
-    memoryModels.push(clean);
-    await saveFallbackModels();
-  }
+  memoryModels = [clean, ...memoryModels.filter((m) => m !== clean)];
+  await saveFallbackModels();
 
   return await getAdminModels();
 }
@@ -2083,13 +2187,30 @@ app.get("/api/admin/translations", async (req: Request, res: Response) => {
   }
 });
 
-// Admin: Get allowed Gemini models
+// Admin: Get allowed Gemini models and defaults
 app.get("/api/models", async (req: Request, res: Response) => {
   try {
     const models = await getAdminModels();
-    return res.json({ models });
+    const defaults = await getDefaultModels();
+    return res.json({ models, defaults });
   } catch (err) {
     return res.status(500).json({ error: "Failed to fetch models." });
+  }
+});
+
+// Admin: Set default Gemini models for features
+app.post("/api/admin/default-models", async (req: Request, res: Response) => {
+  try {
+    const user = await getCurrentUser(req);
+    if (!isUserAdminAccount(user, req)) {
+      return res.status(403).json({ error: "Admin authentication required." });
+    }
+
+    const { generator, translator, docx } = req.body || {};
+    const updatedDefaults = await setDefaultModels({ generator, translator, docx });
+    return res.json({ success: true, defaults: updatedDefaults });
+  } catch (err: any) {
+    return res.status(400).json({ error: err?.message || "Failed to update default models." });
   }
 });
 
@@ -2107,7 +2228,8 @@ app.post("/api/admin/models", async (req: Request, res: Response) => {
     }
 
     const updated = await addAdminModel(model.trim());
-    return res.json({ success: true, models: updated });
+    const defaults = await getDefaultModels();
+    return res.json({ success: true, models: updated, defaults });
   } catch (err: any) {
     return res.status(400).json({ error: err?.message || "Failed to add model." });
   }
@@ -2127,7 +2249,8 @@ app.delete("/api/admin/models", async (req: Request, res: Response) => {
     }
 
     const updated = await deleteAdminModel(model.trim());
-    return res.json({ success: true, models: updated });
+    const defaults = await getDefaultModels();
+    return res.json({ success: true, models: updated, defaults });
   } catch (err: any) {
     return res.status(400).json({ error: err?.message || "Failed to delete model." });
   }
@@ -2137,9 +2260,10 @@ app.post("/api/translate", async (req: Request, res: Response) => {
   const payload = req.body || {};
   const text = (payload.text || "").trim();
   const allowedModels = await getAdminModels();
+  const defaults = await getDefaultModels();
   let model = (payload.model || "").trim();
   if (!model || !allowedModels.includes(model)) {
-    model = allowedModels[0] || "gemini-3.6-flash";
+    model = defaults.translator || allowedModels[0] || "gemini-3.6-flash";
   }
 
   if (!text) {
@@ -2300,12 +2424,13 @@ ${text}`;
 async function translateWithRetry(
   text: string,
   userApiKey?: string,
+  model = "gemini-3.6-flash",
   maxRetries = 3
 ): Promise<{ unicodeText: string; legacyText: string }> {
   let lastErr: any = null;
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
-      const res = await performTranslation(text, userApiKey);
+      const res = await performTranslation(text, userApiKey, model);
       if (res && (res.legacyText || res.unicodeText)) {
         return res;
       }
@@ -2326,11 +2451,12 @@ async function translateWithRetry(
 
 async function batchTranslateTexts(
   texts: string[],
-  userApiKey?: string
+  userApiKey?: string,
+  model = "gemini-3.6-flash"
 ): Promise<{ unicodeText: string; legacyText: string }[]> {
   if (texts.length === 0) return [];
   if (texts.length === 1) {
-    const res = await translateWithRetry(texts[0], userApiKey);
+    const res = await translateWithRetry(texts[0], userApiKey, model);
     return [res];
   }
 
@@ -2361,7 +2487,7 @@ Items to translate:
 ${itemsFormatted}`;
 
   try {
-    const { unicodeText } = await performTranslation(prompt, userApiKey);
+    const { unicodeText } = await performTranslation(prompt, userApiKey, model);
     const itemRegex = /\[ITEM\s+(\d+)\]\s*([\s\S]*?)(?=\[ITEM\s+\d+\]|$)/gi;
     const parsedMap = new Map<number, string>();
     let match;
@@ -2379,7 +2505,7 @@ ${itemsFormatted}`;
       if (trans && trans.length > 0) {
         results.push({ unicodeText: trans, legacyText: ConvertToLegacy(trans) });
       } else {
-        const single = await translateWithRetry(texts[i], userApiKey);
+        const single = await translateWithRetry(texts[i], userApiKey, model);
         results.push(single);
       }
     }
@@ -2388,7 +2514,7 @@ ${itemsFormatted}`;
     console.warn("Batch translation request failed, processing individually:", err);
     const results: { unicodeText: string; legacyText: string }[] = [];
     for (const txt of texts) {
-      const res = await translateWithRetry(txt, userApiKey);
+      const res = await translateWithRetry(txt, userApiKey, model);
       results.push(res);
       await new Promise((r) => setTimeout(r, 200));
     }
@@ -2565,6 +2691,13 @@ app.post("/api/translate-docx", docxUpload.single("file"), async (req: Request, 
     const docxType = (req.body.docxType || req.body.docType || "question").toString().toLowerCase();
     const fontName = docxType === "tute" ? "FMMalithi" : "4u-Chami.";
 
+    const allowedModels = await getAdminModels();
+    const defaults = await getDefaultModels();
+    let model = (req.body.model || "").toString().trim();
+    if (!model || !allowedModels.includes(model)) {
+      model = defaults.docx || allowedModels[0] || "gemini-3.6-flash";
+    }
+
     const userApiKey = (req.body.apiKey || req.headers["x-api-key"] || "").toString().trim();
     const apiKey = userApiKey || process.env.GEMINI_API_KEY_TRANSLATE || process.env.GEMINI_API_KEY;
     if (!apiKey) {
@@ -2632,7 +2765,7 @@ app.post("/api/translate-docx", docxUpload.single("file"), async (req: Request, 
       const batch = workItems.slice(i, i + BATCH_SIZE);
       const texts = batch.map((item) => item.text);
       try {
-        const translations = await batchTranslateTexts(texts, userApiKey);
+        const translations = await batchTranslateTexts(texts, userApiKey, model);
         for (let k = 0; k < batch.length; k++) {
           batch[k].legacyTranslation = translations[k]?.legacyText || ConvertToLegacy(batch[k].text);
         }
@@ -2809,9 +2942,10 @@ app.post("/api/generate", async (req: Request, res: Response) => {
   const payload = req.body || {};
   const topic = (payload.topic || "").trim();
   const allowedModels = await getAdminModels();
+  const defaults = await getDefaultModels();
   let model = (payload.model || "").trim();
   if (!model || !allowedModels.includes(model)) {
-    model = allowedModels[0] || "gemini-3.6-flash";
+    model = defaults.generator || allowedModels[0] || "gemini-3.6-flash";
   }
   const qtype = (payload.qtype || "normal").trim().toLowerCase();
   const userApiKey = (payload.apiKey || req.headers["x-api-key"] || "").toString().trim();

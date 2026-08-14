@@ -131,24 +131,48 @@
             </div>
           </div>
 
-          <div class="field">
-            <div class="label-row">
-              <label for="api-key">Gemini API Key</label>
-              <span class="sub-label">Optional (Custom key if default limit exceeded)</span>
+          <div class="compact-config-box">
+            <div class="compact-config-grid">
+              <div class="field field-compact">
+                <div class="label-row">
+                  <label for="api-key">Gemini API Key</label>
+                  <span class="sub-label">Optional</span>
+                </div>
+                <input
+                  type="password"
+                  id="api-key"
+                  name="api-key"
+                  class="mono-input compact-input"
+                  autocomplete="off"
+                  placeholder="default model එකේ limit පැනලනන් API key එකක් හදල මෙතෙන්ට දාන්න"
+                  title="default model එකේ limit පැනලනන් API key එකක් හදල මෙතෙන්ට දාන්න"
+                >
+              </div>
+
+              <div class="field field-compact">
+                <div class="label-row">
+                  <label for="model">Gemini Model</label>
+                  <span class="sub-label">AI Engine</span>
+                </div>
+                <select
+                  id="model"
+                  name="model"
+                  class="mono-input model-select compact-input"
+                  required
+                >
+                  <option value="gemini-3.6-flash" selected>gemini-3.6-flash</option>
+                  <option value="gemini-3.5-flash">gemini-3.5-flash</option>
+                  <option value="gemini-3.5-flash-lite">gemini-3.5-flash-lite</option>
+                  <option value="gemini-3.1-flash-lite">gemini-3.1-flash-lite</option>
+                </select>
+              </div>
             </div>
-            <input
-              type="password"
-              id="api-key"
-              name="api-key"
-              class="mono-input"
-              autocomplete="off"
-              placeholder="default model එකේ limit පැනලනන් API key එකක් හදල මෙතෙන්ට දාන්න"
-            >
+
             <div class="key-usage-card" id="generator-key-usage-card">
               <div class="key-usage-top">
                 <div class="key-usage-left">
                   <span class="key-usage-badge default-key" id="generator-key-badge">Default Server Key</span>
-                  <span class="key-usage-title" title="Tracked via this application. Google Gemini API does not expose a public API endpoint to query global usage across other external apps.">App Usage Today (RPD)</span>
+                  <span class="key-usage-title" title="Tracked via this application.">App Usage Today (RPD)</span>
                 </div>
                 <div class="key-usage-right">
                   <span class="key-usage-count" id="generator-key-count">0 / 1,500 reqs</span>
@@ -168,21 +192,6 @@
               rows="5"
               required
             ></textarea>
-          </div>
-
-          <div class="field">
-            <label for="model">Gemini Model</label>
-            <select
-              id="model"
-              name="model"
-              class="mono-input model-select"
-              required
-            >
-              <option value="gemini-3.6-flash" selected>gemini-3.6-flash</option>
-              <option value="gemini-3.5-flash">gemini-3.5-flash</option>
-              <option value="gemini-3.5-flash-lite">gemini-3.5-flash-lite</option>
-              <option value="gemini-3.1-flash-lite">gemini-3.1-flash-lite</option>
-            </select>
           </div>
 
           <div class="field">
@@ -249,7 +258,7 @@
 
           <div class="questions-list-header" style="margin-top: 14px; margin-bottom: 6px; display: flex; justify-content: space-between; align-items: center;">
             <label style="font-size: 13px; font-weight: 600; color: var(--text-dim);">Questions Sequence</label>
-            <span class="sub-label" style="font-size: 11px; color: var(--text-faint);">Drag items or use ▲ ▼ arrows to reorder</span>
+            <span class="sub-label" style="font-size: 11px; color: var(--text-faint);">Click to preview • Drag or use ▲ ▼ to reorder</span>
           </div>
           <div id="multi-questions-list" class="questions-list">
             <p class="empty-list-msg">No questions added yet. Fill out the form above and click "Add Question to Document" to add questions one after the other.</p>
@@ -282,24 +291,48 @@
       <!-- Translator View -->
       <section id="view-translator" class="view-panel" role="tabpanel">
         <form id="translate-form" novalidate>
-          <div class="field">
-            <div class="label-row">
-              <label for="translate-api-key">Gemini API Key</label>
-              <span class="sub-label">Optional (Custom key if default limit exceeded)</span>
+          <div class="compact-config-box">
+            <div class="compact-config-grid">
+              <div class="field field-compact">
+                <div class="label-row">
+                  <label for="translate-api-key">Gemini API Key</label>
+                  <span class="sub-label">Optional</span>
+                </div>
+                <input
+                  type="password"
+                  id="translate-api-key"
+                  name="translate-api-key"
+                  class="mono-input compact-input"
+                  autocomplete="off"
+                  placeholder="default model එකේ limit පැනලනන් API key එකක් හදල මෙතෙන්ට දාන්න"
+                  title="default model එකේ limit පැනලනන් API key එකක් හදල මෙතෙන්ට දාන්න"
+                >
+              </div>
+
+              <div class="field field-compact">
+                <div class="label-row">
+                  <label for="translate-model">Gemini Model</label>
+                  <span class="sub-label">AI Engine</span>
+                </div>
+                <select
+                  id="translate-model"
+                  name="translate-model"
+                  class="mono-input model-select compact-input"
+                  required
+                >
+                  <option value="gemini-3.6-flash" selected>gemini-3.6-flash</option>
+                  <option value="gemini-3.5-flash">gemini-3.5-flash</option>
+                  <option value="gemini-3.5-flash-lite">gemini-3.5-flash-lite</option>
+                  <option value="gemini-3.1-flash-lite">gemini-3.1-flash-lite</option>
+                </select>
+              </div>
             </div>
-            <input
-              type="password"
-              id="translate-api-key"
-              name="translate-api-key"
-              class="mono-input"
-              autocomplete="off"
-              placeholder="default model එකේ limit පැනලනන් API key එකක් හදල මෙතෙන්ට දාන්න"
-            >
+
             <div class="key-usage-card" id="translate-key-usage-card">
               <div class="key-usage-top">
                 <div class="key-usage-left">
                   <span class="key-usage-badge default-key" id="translate-key-badge">Default Server Key</span>
-                  <span class="key-usage-title" title="Tracked via this application. Google Gemini API does not expose a public API endpoint to query global usage across other external apps.">App Usage Today (RPD)</span>
+                  <span class="key-usage-title" title="Tracked via this application.">App Usage Today (RPD)</span>
                 </div>
                 <div class="key-usage-right">
                   <span class="key-usage-count" id="translate-key-count">0 / 1,500 reqs</span>
@@ -351,24 +384,48 @@
       <!-- DOCX Translate View -->
       <section id="view-docx" class="view-panel is-hidden" role="tabpanel">
         <form id="docx-form" novalidate>
-          <div class="field">
-            <div class="label-row">
-              <label for="docx-api-key">Gemini API Key</label>
-              <span class="sub-label">Optional (Custom key if default limit exceeded)</span>
+          <div class="compact-config-box">
+            <div class="compact-config-grid">
+              <div class="field field-compact">
+                <div class="label-row">
+                  <label for="docx-api-key">Gemini API Key</label>
+                  <span class="sub-label">Optional</span>
+                </div>
+                <input
+                  type="password"
+                  id="docx-api-key"
+                  name="docx-api-key"
+                  class="mono-input compact-input"
+                  autocomplete="off"
+                  placeholder="default model එකේ limit පැනලනන් API key එකක් හදල මෙතෙන්ට දාන්න"
+                  title="default model එකේ limit පැනලනන් API key එකක් හදල මෙතෙන්ට දාන්න"
+                >
+              </div>
+
+              <div class="field field-compact">
+                <div class="label-row">
+                  <label for="docx-model">Gemini Model</label>
+                  <span class="sub-label">AI Engine</span>
+                </div>
+                <select
+                  id="docx-model"
+                  name="docx-model"
+                  class="mono-input model-select compact-input"
+                  required
+                >
+                  <option value="gemini-3.6-flash" selected>gemini-3.6-flash</option>
+                  <option value="gemini-3.5-flash">gemini-3.5-flash</option>
+                  <option value="gemini-3.5-flash-lite">gemini-3.5-flash-lite</option>
+                  <option value="gemini-3.1-flash-lite">gemini-3.1-flash-lite</option>
+                </select>
+              </div>
             </div>
-            <input
-              type="password"
-              id="docx-api-key"
-              name="docx-api-key"
-              class="mono-input"
-              autocomplete="off"
-              placeholder="default model එකේ limit පැනලනන් API key එකක් හදල මෙතෙන්ට දාන්න"
-            >
+
             <div class="key-usage-card" id="docx-key-usage-card">
               <div class="key-usage-top">
                 <div class="key-usage-left">
                   <span class="key-usage-badge default-key" id="docx-key-badge">Default Server Key</span>
-                  <span class="key-usage-title" title="Tracked via this application. Google Gemini API does not expose a public API endpoint to query global usage across other external apps.">App Usage Today (RPD)</span>
+                  <span class="key-usage-title" title="Tracked via this application.">App Usage Today (RPD)</span>
                 </div>
                 <div class="key-usage-right">
                   <span class="key-usage-count" id="docx-key-count">0 / 1,500 reqs</span>
@@ -630,6 +687,32 @@
 
           <!-- Admin Section 3: Gemini Models Management -->
           <div id="admin-sec-models" class="admin-section is-hidden">
+            <!-- Default Pre-Selected Models Configuration -->
+            <div class="vocab-section" style="margin-bottom: 24px; padding-bottom: 18px; border-bottom: 1px solid var(--border-soft);">
+              <div class="section-heading">Default Pre-Selected Models</div>
+              <p class="field-hint" style="margin-bottom: 14px; color: var(--text-dim); font-size: 13px;">
+                Choose which Gemini model is pre-selected by default for users in each tool.
+              </p>
+              <form id="admin-default-models-form" class="vocab-form" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 14px; align-items: flex-end;">
+                <div class="field" style="margin-bottom: 0;">
+                  <label for="admin-default-generator-model" class="field-label" style="font-size: 12px; font-weight: 600; color: var(--text-dim);">MCQ Generator Default</label>
+                  <select id="admin-default-generator-model" class="text-input mono-input" style="padding: 8px 10px; width: 100%;"></select>
+                </div>
+                <div class="field" style="margin-bottom: 0;">
+                  <label for="admin-default-translator-model" class="field-label" style="font-size: 12px; font-weight: 600; color: var(--text-dim);">Translator Default</label>
+                  <select id="admin-default-translator-model" class="text-input mono-input" style="padding: 8px 10px; width: 100%;"></select>
+                </div>
+                <div class="field" style="margin-bottom: 0;">
+                  <label for="admin-default-docx-model" class="field-label" style="font-size: 12px; font-weight: 600; color: var(--text-dim);">DOCX Translate Default</label>
+                  <select id="admin-default-docx-model" class="text-input mono-input" style="padding: 8px 10px; width: 100%;"></select>
+                </div>
+                <div class="field" style="margin-bottom: 0;">
+                  <button type="submit" id="admin-save-default-models-btn" class="generate-btn vocab-submit-btn" style="height: 38px; width: 100%;">Save Default Models</button>
+                </div>
+              </form>
+              <p id="admin-default-models-status" class="status" role="status" aria-live="polite" style="margin-top: 8px;"></p>
+            </div>
+
             <form id="admin-add-model-form" class="vocab-add-form" style="margin-bottom: 20px;">
               <div class="section-heading">Add Allowed Gemini Model</div>
               <div class="vocab-input-group" style="display: flex; gap: 12px; align-items: flex-end;">
@@ -692,6 +775,40 @@
       </button>
 
       <p id="auth-status" class="status" role="status" aria-live="polite" style="margin-top: 12px;"></p>
+    </div>
+  </div>
+
+  <!-- Question Preview Modal -->
+  <div id="q-preview-modal" class="auth-modal is-hidden" role="dialog" aria-modal="true" aria-labelledby="q-preview-title">
+    <div class="auth-modal-overlay" id="q-preview-overlay"></div>
+    <div class="auth-modal-card q-preview-card">
+      <button type="button" id="q-preview-close" class="modal-close-btn" aria-label="Close Preview">&times;</button>
+      
+      <div class="q-preview-header">
+        <div class="q-preview-header-meta">
+          <span id="q-preview-index-badge" class="q-preview-badge">Question #1</span>
+          <span id="q-preview-type-badge" class="q-type-tag">Normal</span>
+          <span id="q-preview-ans-badge" class="q-preview-ans-badge">Ans: Option #1</span>
+        </div>
+        <h3 id="q-preview-title" class="q-preview-topic-title">Question Preview</h3>
+      </div>
+
+      <div id="q-preview-body" class="q-preview-body">
+        <!-- Injected via JavaScript -->
+      </div>
+
+      <div class="q-preview-footer">
+        <div class="q-preview-nav">
+          <button type="button" id="q-preview-prev-btn" class="q-preview-nav-btn" title="Previous Question (Left Arrow)">
+            <span>&#8592; Previous</span>
+          </button>
+          <span id="q-preview-counter" class="q-preview-counter">1 of 1</span>
+          <button type="button" id="q-preview-next-btn" class="q-preview-nav-btn" title="Next Question (Right Arrow)">
+            <span>Next &#8594;</span>
+          </button>
+        </div>
+        <button type="button" id="q-preview-done-btn" class="auth-btn auth-btn--primary q-preview-done-btn">Done</button>
+      </div>
     </div>
   </div>
 
