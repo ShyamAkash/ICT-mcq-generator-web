@@ -2256,6 +2256,60 @@ app.delete("/api/admin/models", async (req: Request, res: Response) => {
   }
 });
 
+function formatGeminiError(err: any): string {
+  const raw = err?.message || (typeof err === "string" ? err : JSON.stringify(err || ""));
+  if (
+    raw.includes("429") ||
+    raw.includes("RESOURCE_EXHAUSTED") ||
+    raw.includes("exceeded your current quota") ||
+    raw.includes("Quota exceeded") ||
+    raw.includes("rate-limits") ||
+    raw.includes("rate_limit_exceeded")
+  ) {
+    return "Default API key has exceeded its limit for this specific model. Try adding your own API key or change the Gemini model.";
+  }
+  if (
+    raw.includes("503") ||
+    raw.includes("experiencing high demand") ||
+    raw.includes("UNAVAILABLE") ||
+    raw.includes("spikes in demand") ||
+    raw.includes("overloaded")
+  ) {
+    return "This model is currently experiencing high demand. Try changing the Gemini model used.";
+  }
+  try {
+    const match = raw.match(/\{[\s\S]*"error"[\s\S]*\}/);
+    if (match) {
+      const parsed = JSON.parse(match[0]);
+      if (
+        parsed?.error?.code === 429 ||
+        parsed?.error?.status === "RESOURCE_EXHAUSTED" ||
+        (parsed?.error?.message &&
+          (parsed.error.message.includes("quota") ||
+            parsed.error.message.includes("RESOURCE_EXHAUSTED") ||
+            parsed.error.message.includes("429")))
+      ) {
+        return "Default API key has exceeded its limit for this specific model. Try adding your own API key or change the Gemini model.";
+      }
+      if (
+        parsed?.error?.code === 503 ||
+        parsed?.error?.status === "UNAVAILABLE" ||
+        (parsed?.error?.message &&
+          (parsed.error.message.includes("high demand") ||
+            parsed.error.message.includes("UNAVAILABLE") ||
+            parsed.error.message.includes("503")))
+      ) {
+        return "This model is currently experiencing high demand. Try changing the Gemini model used.";
+      }
+      if (parsed?.error?.message) {
+        return `The Gemini API request failed: ${parsed.error.message}`;
+      }
+    }
+  } catch (_) {}
+
+  return `The Gemini API request failed: ${raw}`;
+}
+
 app.post("/api/translate", async (req: Request, res: Response) => {
   const payload = req.body || {};
   const text = (payload.text || "").trim();
@@ -2317,7 +2371,7 @@ app.post("/api/translate", async (req: Request, res: Response) => {
 
     return res.json({ translation: legacyText, unicode: unicodeText, guest_id: guestId, keyUsage });
   } catch (exc: any) {
-    return res.status(502).json({ error: `The Gemini API request failed: ${exc?.message || exc}` });
+    return res.status(502).json({ error: formatGeminiError(exc) });
   }
 });
 
@@ -2414,7 +2468,7 @@ ${text}`;
   }
 
   if (lastError && !unicodeTranslation) {
-    throw new Error(`Gemini translation request failed: ${lastError?.message || lastError}`);
+    throw new Error(formatGeminiError(lastError));
   }
 
   const legacyText = ConvertToLegacy(unicodeTranslation);
@@ -2989,7 +3043,7 @@ app.post("/api/generate", async (req: Request, res: Response) => {
     });
     responseText = response.text || "";
   } catch (exc: any) {
-    return res.status(502).json({ error: `The Gemini API request failed: ${exc?.message || exc}` });
+    return res.status(502).json({ error: formatGeminiError(exc) });
   }
 
   let resdict: any;

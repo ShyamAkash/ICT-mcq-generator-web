@@ -301,10 +301,35 @@
     }, 12000);
   }
 
+  function formatFriendlyErrorMessage(msg) {
+    if (!msg || typeof msg !== "string") return msg || "";
+    if (
+      msg.includes("429") ||
+      msg.includes("RESOURCE_EXHAUSTED") ||
+      msg.includes("exceeded your current quota") ||
+      msg.includes("Quota exceeded") ||
+      msg.includes("rate-limits") ||
+      msg.includes("rate_limit_exceeded")
+    ) {
+      return "Default API key has exceeded its limit for this specific model. Try adding your own API key or change the Gemini model.";
+    }
+    if (
+      msg.includes("503") ||
+      msg.includes("experiencing high demand") ||
+      msg.includes("UNAVAILABLE") ||
+      msg.includes("spikes in demand") ||
+      msg.includes("overloaded")
+    ) {
+      return "This model is currently experiencing high demand. Try changing the Gemini model used.";
+    }
+    return msg;
+  }
+
   // Helper for status messages
   function setStatus(el, message, kind) {
     if (!el) return;
-    el.textContent = message || "";
+    const finalMsg = kind === "error" ? formatFriendlyErrorMessage(message) : (message || "");
+    el.textContent = finalMsg;
     el.classList.remove("is-error", "is-success", "is-info");
     if (kind) el.classList.add(`is-${kind}`);
   }
